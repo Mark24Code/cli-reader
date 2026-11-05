@@ -160,7 +160,7 @@ print(greet("终端读者"))`
       <img src="images/wide.png" alt="一幅横向渐变色图片，用于测试缩略图宽度"/>
       <figcaption>横向图片：按 Enter 可以用 iTerm2 原生协议查看高清大图。</figcaption>
     </figure>
-    <p>代码之后，继续向下滚动。</p>
+    <p>代码之后，继续向下滚动。也可以顺着 <a href="ch1.xhtml#why">这个链接回到第一章的说明</a>，或者跳到 <a href="#syntax">本节的锚点</a>。</p>
   </section>
 </body>
 </html>`

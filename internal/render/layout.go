@@ -15,7 +15,16 @@ type cell struct {
 	r       rune
 	w       int
 	style   Style
+	link    string
 	newline bool
+}
+
+// lineLink is a clickable link run within one laid-out line. Columns are
+// zero-based display cells.
+type lineLink struct {
+	start int
+	end   int
+	href  string
 }
 
 type chunk struct {
@@ -41,7 +50,7 @@ func layoutSpans(spans []epub.Span, width int, base Style, styleFor func(epub.Sp
 			if w < 0 {
 				w = 0
 			}
-			cells = append(cells, cell{r: r, w: w, style: st})
+			cells = append(cells, cell{r: r, w: w, style: st, link: sp.Link})
 		}
 	}
 	return layoutCells(cells, width)
@@ -73,10 +82,12 @@ func layoutCells(cells []cell, width int) [][]cell {
 				flush()
 			} else {
 				sp := Style{}
+				link := ""
 				if len(ch.cells) > 0 {
 					sp = ch.cells[0].style
+					link = ch.cells[0].link
 				}
-				line = append(line, cell{r: ' ', w: 1, style: sp})
+				line = append(line, cell{r: ' ', w: 1, style: sp, link: link})
 				lineWidth++
 			}
 		}
@@ -225,9 +236,42 @@ func truncateVisible(s string, width int) string {
 	return ansi.Truncate(s, width, "…")
 }
 
+// collectLineLinks turns linked cells into contiguous column runs. Interior
+// spaces inherit their neighbouring link so a multi-word link stays one run.
+func collectLineLinks(cells []cell) []lineLink {
+	var out []lineLink
+	col := 0
+	start := -1
+	href := ""
+	flush := func(end int) {
+		if start >= 0 && end > start {
+			out = append(out, lineLink{start: start, end: end, href: href})
+		}
+		start = -1
+		href = ""
+	}
+	for _, c := range cells {
+		if c.link == "" {
+			flush(col)
+		} else if start < 0 || c.link != href {
+			flush(col)
+			start = col
+			href = c.link
+		}
+		col += c.w
+	}
+	flush(col)
+	return out
+}
+
 func wrapStyledLines(spans []epub.Span, width int, base Style, firstPrefix, contPrefix string) []string {
+	lines, _ := wrapStyledLinesWithLinks(spans, width, base, firstPrefix, contPrefix)
+	return lines
+}
+
+func wrapStyledLinesWithLinks(spans []epub.Span, width int, base Style, firstPrefix, contPrefix string) ([]string, [][]lineLink) {
 	if width <= 0 {
-		return nil
+		return nil, nil
 	}
 	firstStyled := firstPrefix
 	contStyled := contPrefix
@@ -243,9 +287,10 @@ func wrapStyledLines(spans []epub.Span, width int, base Style, firstPrefix, cont
 	}
 	lines := layoutSpans(spans, avail, base, spanStyle)
 	if len(lines) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]string, 0, len(lines))
+	links := make([][]lineLink, len(lines))
 	for i, line := range lines {
 		prefix := contStyled
 		if i == 0 {
@@ -257,8 +302,15 @@ func wrapStyledLines(spans []epub.Span, width int, base Style, firstPrefix, cont
 			content = ""
 		}
 		out = append(out, strings.TrimRight(prefix+content, " "))
+		if ls := collectLineLinks(line); len(ls) > 0 {
+			for j := range ls {
+				ls[j].start += prefixW
+				ls[j].end += prefixW
+			}
+			links[i] = ls
+		}
 	}
-	return out
+	return out, links
 }
 
 func runeWidth(r rune) int {

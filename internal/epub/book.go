@@ -301,3 +301,33 @@ func (b *Book) ChapterByHref(href string) int {
 	}
 	return -1
 }
+
+// LinkTarget is the resolved destination of a link found in chapter content.
+type LinkTarget struct {
+	Chapter  int    // spine index; -1 when the target cannot be displayed
+	Fragment string // anchor name inside the target document
+	External bool   // points outside the book (http, mailto, ...)
+	Missing  bool   // internal target file is absent from the archive
+}
+
+// ResolveLink resolves a raw href found in content whose document is baseHref.
+func (b *Book) ResolveLink(baseHref, raw string) LinkTarget {
+	zipPath, fragment, external, err := b.resolveHref(baseHref, raw)
+	target := LinkTarget{Chapter: -1, Fragment: fragment, External: external}
+	if external {
+		return target
+	}
+	if zipPath == "" {
+		// A fragment-only link stays in the current document.
+		if err == nil {
+			target.Chapter = b.ChapterByHref(baseHref)
+		}
+		return target
+	}
+	if err != nil {
+		target.Missing = true
+		return target
+	}
+	target.Chapter = b.ChapterByHref(zipPath)
+	return target
+}

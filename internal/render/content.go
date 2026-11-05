@@ -28,6 +28,15 @@ type ImageSpan struct {
 	PixelH    int
 }
 
+// LinkSpan marks a clickable link region on a single rendered line. Columns
+// are zero-based display cells and EndCol is exclusive.
+type LinkSpan struct {
+	Line     int
+	StartCol int
+	EndCol   int
+	Href     string
+}
+
 // RenderedChapter is the final, width-dependent terminal representation of a
 // chapter. All Lines are guaranteed not to exceed Width display cells.
 type RenderedChapter struct {
@@ -36,6 +45,7 @@ type RenderedChapter struct {
 	Lines        []string
 	BlockStart   []int
 	Images       []ImageSpan
+	Links        []LinkSpan
 	Anchors      map[string]int
 }
 
@@ -61,6 +71,17 @@ func NewRenderer(images ImageProvider) *Renderer {
 		cache:  make(map[string]image.Image),
 		thumbs: make(map[string]thumbnail),
 	}
+}
+
+// renderedBlock is one block's output plus per-line link runs. Links is
+// parallel to Lines.
+type renderedBlock struct {
+	Lines []string
+	Links [][]lineLink
+}
+
+func singleBlock(lines []string) renderedBlock {
+	return renderedBlock{Lines: lines}
 }
 
 func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *RenderedChapter {
@@ -109,7 +130,7 @@ func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *Ren
 		rc.BlockStart[i] = len(rc.Lines)
 		prevKind = block.Kind
 		haveBlock = true
-		var rendered []string
+		var rendered renderedBlock
 		switch block.Kind {
 		case epub.BlockHeading:
 			rendered = r.renderHeading(block, width)
@@ -118,20 +139,42 @@ func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *Ren
 		case epub.BlockListItem:
 			rendered = r.renderListItem(block, width)
 		case epub.BlockCode:
-			rendered = renderCodeBlock(block.Code, block.Lang, width)
+			rendered = singleBlock(renderCodeBlock(block.Code, block.Lang, width))
 		case epub.BlockImage:
 			imageIndex++
-			rendered = r.renderImage(block, width, opts, imageIndex, imageCount, len(rc.Lines), &rc.Images)
+			rendered = singleBlock(r.renderImage(block, width, opts, imageIndex, imageCount, len(rc.Lines), &rc.Images))
 		case epub.BlockRule:
-			rendered = renderRule(width)
+			rendered = singleBlock(renderRule(width))
 		case epub.BlockTable:
 			rendered = r.renderTable(block, width)
 		}
-		for _, line := range rendered {
+		lineBase := len(rc.Lines)
+		for k, line := range rendered.Lines {
 			if visibleWidth(line) > width {
 				line = ansi.Truncate(line, width, "")
 			}
 			rc.Lines = append(rc.Lines, line)
+			if k >= len(rendered.Links) {
+				continue
+			}
+			lineW := visibleWidth(line)
+			for _, link := range rendered.Links[k] {
+				start, end := link.start, link.end
+				if start < 0 {
+					start = 0
+				}
+				if end > lineW {
+					end = lineW
+				}
+				if end > start {
+					rc.Links = append(rc.Links, LinkSpan{
+						Line:     lineBase + k,
+						StartCol: start,
+						EndCol:   end,
+						Href:     link.href,
+					})
+				}
+			}
 		}
 	}
 	for len(rc.Lines) > 0 && strings.TrimSpace(ansi.Strip(rc.Lines[len(rc.Lines)-1])) == "" {
@@ -160,24 +203,27 @@ func addBlankLine(lines *[]string) {
 	*lines = append(*lines, "")
 }
 
-func (r *Renderer) renderHeading(b *epub.Block, width int) []string {
+func (r *Renderer) renderHeading(b *epub.Block, width int) renderedBlock {
 	base := Style{FG: theme.Accent, Bold: true}
 	if b.Level > 3 {
 		base = Style{Bold: true}
 	}
-	return wrapStyledLines(b.Spans, width, base, "  ", "  ")
+	lines, links := wrapStyledLinesWithLinks(b.Spans, width, base, "  ", "  ")
+	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderParagraph(b *epub.Block, width int) []string {
+func (r *Renderer) renderParagraph(b *epub.Block, width int) renderedBlock {
 	if b.Quote {
 		base := Style{Italic: true}
 		prefix := "  " + Style{FG: theme.Muted}.Render("│ ")
-		return wrapStyledLines(b.Spans, width, base, prefix, prefix)
+		lines, links := wrapStyledLinesWithLinks(b.Spans, width, base, prefix, prefix)
+		return renderedBlock{Lines: lines, Links: links}
 	}
-	return wrapStyledLines(b.Spans, width, Style{}, "  ", "  ")
+	lines, links := wrapStyledLinesWithLinks(b.Spans, width, Style{}, "  ", "  ")
+	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderListItem(b *epub.Block, width int) []string {
+func (r *Renderer) renderListItem(b *epub.Block, width int) renderedBlock {
 	depth := b.Depth
 	if depth < 1 {
 		depth = 1
@@ -198,10 +244,11 @@ func (r *Renderer) renderListItem(b *epub.Block, width int) []string {
 	if b.Quote {
 		base.Italic = true
 	}
-	return wrapStyledLines(b.Spans, width, base, first, cont)
+	lines, links := wrapStyledLinesWithLinks(b.Spans, width, base, first, cont)
+	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderTable(b *epub.Block, width int) []string {
+func (r *Renderer) renderTable(b *epub.Block, width int) renderedBlock {
 	var out []string
 	for _, row := range b.Table {
 		text := strings.Join(row, "  │  ")
@@ -209,7 +256,7 @@ func (r *Renderer) renderTable(b *epub.Block, width int) []string {
 		lines := wrapStyledLines(spans, width, Style{}, "  ", "  ")
 		out = append(out, lines...)
 	}
-	return out
+	return singleBlock(out)
 }
 
 func renderRule(width int) []string {
@@ -368,6 +415,17 @@ func (rc *RenderedChapter) VisibleImage(top, height int) *ImageSpan {
 		}
 	}
 	return best
+}
+
+// LinkAt returns the link target covering the given line and display column.
+func (rc *RenderedChapter) LinkAt(line, col int) (string, bool) {
+	for i := range rc.Links {
+		l := &rc.Links[i]
+		if l.Line == line && col >= l.StartCol && col < l.EndCol {
+			return l.Href, true
+		}
+	}
+	return "", false
 }
 
 func (rc *RenderedChapter) LineForAnchor(fragment string) (int, bool) {

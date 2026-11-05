@@ -124,6 +124,32 @@ func TestNCXOnlyAndFallbackTOC(t *testing.T) {
 	}
 }
 
+func TestResolveLink(t *testing.T) {
+	book := openSample(t, testepub.DefaultOptions())
+	base := book.Chapters[1].Href
+	cases := []struct {
+		raw      string
+		chapter  int
+		fragment string
+		external bool
+		missing  bool
+	}{
+		{raw: "ch1.xhtml#why", chapter: 0, fragment: "why"},
+		{raw: "#syntax", chapter: 1, fragment: "syntax"},
+		{raw: "https://example.com/book", chapter: -1, external: true},
+		{raw: "missing.xhtml", chapter: -1, missing: true},
+		{raw: "nav.xhtml", chapter: -1},
+	}
+	for _, tc := range cases {
+		got := book.ResolveLink(base, tc.raw)
+		if got.Chapter != tc.chapter || got.Fragment != tc.fragment ||
+			got.External != tc.external || got.Missing != tc.missing {
+			t.Errorf("ResolveLink(%q) = %#v, want chapter=%d fragment=%q external=%v missing=%v",
+				tc.raw, got, tc.chapter, tc.fragment, tc.external, tc.missing)
+		}
+	}
+}
+
 func TestSanitizeText(t *testing.T) {
 	got := epub.SanitizeText("a\x1b[31mb\x00c\u009bd\n\tkeep")
 	if strings.ContainsAny(got, "\x1b\x00\u009b") {

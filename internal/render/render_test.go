@@ -66,6 +66,37 @@ func TestRenderImageAndAnchorTracking(t *testing.T) {
 	}
 }
 
+func TestLinkSpansTrackCoordinates(t *testing.T) {
+	book := sampleBook(t)
+	r := render.NewRenderer(book)
+	rc := r.RenderChapter(&book.Chapters[1], 80, render.Options{})
+	want := map[string]bool{"ch1.xhtml#why": false, "#syntax": false}
+	for _, link := range rc.Links {
+		if _, ok := want[link.Href]; ok {
+			want[link.Href] = true
+		}
+		if link.Line < 0 || link.Line >= len(rc.Lines) {
+			t.Fatalf("link line out of range: %#v", link)
+		}
+		lineW := ansi.StringWidth(ansi.Strip(rc.Lines[link.Line]))
+		if link.StartCol < 0 || link.EndCol > lineW || link.EndCol <= link.StartCol {
+			t.Fatalf("bad link columns %#v (line width %d)", link, lineW)
+		}
+		href, ok := rc.LinkAt(link.Line, link.StartCol)
+		if !ok || href != link.Href {
+			t.Fatalf("LinkAt(%d,%d) = %q,%v want %q", link.Line, link.StartCol, href, ok, link.Href)
+		}
+		if _, ok := rc.LinkAt(link.Line, link.EndCol); ok {
+			t.Fatalf("LinkAt past EndCol should miss: %#v", link)
+		}
+	}
+	for href, found := range want {
+		if !found {
+			t.Fatalf("missing link span for %q", href)
+		}
+	}
+}
+
 func TestScrollPercent(t *testing.T) {
 	if p := render.ScrollPercent(10, 20, 0); p != 0 {
 		t.Fatalf("short chapter percent = %v", p)

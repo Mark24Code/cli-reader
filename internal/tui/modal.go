@@ -47,6 +47,8 @@ func (m *Model) helpLines() []string {
 		"快捷键 · 浏览",
 		"  ↑/↓ 或 j/k        逐行滚动",
 		"  PgUp/PgDn/Space   整页滚动",
+		"  鼠标滚轮          翻页",
+		"  鼠标点击链接      跳转到目标章节",
 		"  ←/→ 或 h/l        上一章 / 下一章",
 		"  g / G             章首 / 章尾",
 		"  Enter             打开视口内图片",
@@ -81,13 +83,7 @@ func (m *Model) helpLines() []string {
 }
 
 func (m Model) viewModal(base string) string {
-	boxW := m.width - 8
-	if boxW > 80 {
-		boxW = 80
-	}
-	if boxW < 30 {
-		boxW = 30
-	}
+	boxW := m.modalBoxWidth()
 	contentW := boxW - 6
 	if contentW < 20 {
 		contentW = 20
@@ -95,23 +91,42 @@ func (m Model) viewModal(base string) string {
 	rows := m.modalListRows()
 
 	var title, footer string
-	var body []string
 	switch m.modal.kind {
 	case modalTOC:
 		title = fmt.Sprintf("目录 · %s", m.book.Title)
 		if contentW >= 56 {
-			footer = "↑↓ 选择 · PgUp/PgDn 翻页 · Enter 跳转 · s 收藏章节 · Esc 关闭"
+			footer = "↑↓ 选择 · 点击/Enter 跳转 · 滚轮翻页 · s 收藏 · Esc 关闭"
 		} else {
-			footer = "↑↓ 选择 · Enter 跳转 · s 收藏 · Esc 关闭"
+			footer = "↑↓ 选择 · 点击跳转 · s 收藏 · Esc 关闭"
 		}
-		body = m.tocRows(contentW, rows)
 	case modalFavorites:
 		title = "收藏"
 		footer = "↑↓ 选择 · Enter 跳转 · d 删除 · Esc 关闭"
-		body = m.favoriteRows(contentW, rows)
 	case modalHelp:
 		title = "帮助"
 		footer = "↑↓ 或 PgUp/PgDn 滚动 · Esc 关闭"
+	}
+	body := m.modalBody(contentW, rows)
+
+	lines := make([]string, 0, len(body)+5)
+	lines = append(lines, padPlainANSI(truncLine(styleAccentBold.Render(title), contentW), contentW))
+	lines = append(lines, "")
+	lines = append(lines, body...)
+	lines = append(lines, "")
+	lines = append(lines, padPlainANSI(truncLine(styleMuted.Render(footer), contentW), contentW))
+	box := styleModal.Render(strings.Join(lines, "\n"))
+	return overlayModal(base, box, m.width, m.height)
+}
+
+// modalBody renders the scrollable rows of the current modal.
+func (m Model) modalBody(contentW, rows int) []string {
+	var body []string
+	switch m.modal.kind {
+	case modalTOC:
+		body = m.tocRows(contentW, rows)
+	case modalFavorites:
+		body = m.favoriteRows(contentW, rows)
+	case modalHelp:
 		all := m.helpLines()
 		off := m.modal.offset
 		if off < 0 {
@@ -131,15 +146,60 @@ func (m Model) viewModal(base string) string {
 	if len(body) == 0 {
 		body = append(body, padPlain(fitPlain("（空）", contentW), contentW))
 	}
+	return body
+}
 
-	lines := make([]string, 0, len(body)+5)
-	lines = append(lines, padPlainANSI(truncLine(styleAccentBold.Render(title), contentW), contentW))
-	lines = append(lines, "")
-	lines = append(lines, body...)
-	lines = append(lines, "")
-	lines = append(lines, padPlainANSI(truncLine(styleMuted.Render(footer), contentW), contentW))
-	box := styleModal.Render(strings.Join(lines, "\n"))
-	return overlayModal(base, box, m.width, m.height)
+func (m Model) modalBoxWidth() int {
+	boxW := m.width - 8
+	if boxW > 80 {
+		boxW = 80
+	}
+	if boxW < 30 {
+		boxW = 30
+	}
+	return boxW
+}
+
+// modalBox describes where the modal is drawn on screen. bodyTop is the
+// first screen row of the scrollable body; bodyLeft is its first column.
+type modalBox struct {
+	x, y          int
+	width, height int
+	contentW      int
+	rows          int
+	bodyTop       int
+	bodyLeft      int
+}
+
+func (m Model) modalBoxRect() modalBox {
+	boxW := m.modalBoxWidth()
+	contentW := boxW - 6
+	if contentW < 20 {
+		contentW = 20
+	}
+	rows := m.modalListRows()
+	// Content rows: title, blank, body, blank, footer.
+	contentLines := 2 + len(m.modalBody(contentW, rows)) + 2
+	// Lipgloss adds one border row top and bottom plus one padding row each.
+	height := contentLines + 4
+	x := (m.width - boxW) / 2
+	y := (m.height - height) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return modalBox{
+		x: x, y: y,
+		width: boxW, height: height,
+		contentW: contentW,
+		rows:     rows,
+		// border (1) + padding top (1) + title and blank (2)
+		bodyTop: y + 4,
+		// border (1) + padding left (2)
+		bodyLeft: x + 3,
+	}
 }
 
 func (m Model) tocRows(contentW, rows int) []string {

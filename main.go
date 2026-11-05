@@ -79,7 +79,7 @@ func run(args []string) int {
 	store := state.Load(path)
 	key := state.BookKey(bookPath)
 	model := tui.New(book, store, key, protocol)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	final, err := program.Run()
 	if m, ok := final.(tui.Model); ok {
 		if saveErr := m.Finalize(); saveErr != nil {
