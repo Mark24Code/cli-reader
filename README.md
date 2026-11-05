@@ -59,7 +59,7 @@
 
 ```sh
 make build
-./bin/claude-epub testdata/demo.epub
+./bin/cli-epub-reader testdata/demo.epub
 ```
 
 或者：
@@ -165,7 +165,7 @@ iTerm2 有约 1 MiB 的传输限制；图片准备阶段会优先复用原始 PN
 如果原图没有弹出：
 
 ```sh
-./bin/claude-epub --image-protocol iterm2 testdata/demo.epub
+./bin/cli-epub-reader --image-protocol iterm2 testdata/demo.epub
 ```
 
 并确认没有运行在 tmux/screen 中、终端支持对应图片协议。

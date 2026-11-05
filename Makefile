@@ -1,7 +1,7 @@
 .PHONY: build test vet fmt run sample clean
 
 build:
-	go build -o bin/claude-epub .
+	go build -o bin/cli-epub-reader .
 
 test:
 	go test ./...
@@ -13,7 +13,7 @@ fmt:
 	gofmt -w .
 
 run: build
-	./bin/claude-epub testdata/demo.epub
+	./bin/cli-epub-reader testdata/demo.epub
 
 sample:
 	go run scripts/gen-demo-epub.go

@@ -26,13 +26,13 @@ func main() {
 }
 
 func run(args []string) int {
-	fs := flag.NewFlagSet("claude-epub", flag.ContinueOnError)
+	fs := flag.NewFlagSet("cli-epub-reader", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	stateFile := fs.String("state-file", "", "收藏与阅读进度文件路径")
 	protocolFlag := fs.String("image-protocol", "auto", "图片协议: auto, iterm2, kitty, none")
 	showVersion := fs.Bool("version", false, "显示版本")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "用法: claude-epub [选项] <book.epub>")
+		fmt.Fprintln(os.Stderr, "用法: cli-epub-reader [选项] <book.epub>")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "在 Claude 风格的终端界面中阅读 EPUB。")
 		fmt.Fprintln(os.Stderr)
@@ -45,7 +45,7 @@ func run(args []string) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Println("claude-epub", version)
+		fmt.Println("cli-epub-reader", version)
 		return 0
 	}
 	if fs.NArg() != 1 {
