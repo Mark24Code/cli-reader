@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -11,18 +13,48 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.tooSmall || m.viewerBusy {
 		return m, nil
 	}
-	if msg.Action != tea.MouseActionPress {
-		return m, nil
-	}
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		m.wheelScroll(-wheelScrollLines)
-		return m, nil
-	case tea.MouseButtonWheelDown:
-		m.wheelScroll(wheelScrollLines)
-		return m, nil
-	}
-	if msg.Button == tea.MouseButtonLeft {
+	switch msg.Action {
+	case tea.MouseActionPress:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.wheelScroll(-wheelScrollLines)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.wheelScroll(wheelScrollLines)
+			return m, nil
+		case tea.MouseButtonLeft:
+			// Defer clicks until release so a drag can select text instead.
+			m.selection = selectionState{
+				active: true,
+				anchor: selPoint{X: msg.X, Y: msg.Y},
+				cursor: selPoint{X: msg.X, Y: msg.Y},
+			}
+		}
+	case tea.MouseActionMotion:
+		if m.selection.active {
+			m.selection.cursor = selPoint{X: msg.X, Y: msg.Y}
+			if m.selection.cursor != m.selection.anchor {
+				m.selection.moved = true
+			}
+		}
+	case tea.MouseActionRelease:
+		if !m.selection.active {
+			break
+		}
+		m.selection.cursor = selPoint{X: msg.X, Y: msg.Y}
+		sel := m.selection
+		m.selection = selectionState{}
+		if sel.cursor != sel.anchor {
+			sel.moved = true
+		}
+		if sel.moved {
+			text := selectedText(m.renderView(), sel)
+			if strings.TrimSpace(text) == "" {
+				m.setNotice("未选中可复制的文本", true)
+				return m, nil
+			}
+			return m, copyTextCmd(text)
+		}
 		m.handleClick(msg.X, msg.Y)
 	}
 	return m, nil

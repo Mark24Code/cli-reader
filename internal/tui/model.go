@@ -68,6 +68,7 @@ type Model struct {
 	cmdHistPos int
 
 	viewerBusy bool
+	selection  selectionState
 }
 
 func New(book *epub.Book, store *state.Store, key string, protocol imgterm.Protocol) Model {

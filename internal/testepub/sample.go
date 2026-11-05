@@ -129,7 +129,7 @@ print(greet("终端读者"))`
   <section>
     <h1>第一章 开篇</h1>
     <p>这是一本只在终端里阅读的小书。它的正文不是聊天记录，而是 EPUB 里的真实章节；界面看起来却像是 Claude 正在回答你。</p>
-    <p>向下滚动就能继续读，本章结束后会自动进入下一章。<strong>粗体</strong>、<em>斜体</em>、<code>行内代码</code> 都会尽量保留原有层次。</p>
+    <p>向下滚动就能继续读，本章结束后会自动进入下一章。<strong>粗体</strong>、<em>斜体</em>、<span style="font-weight: bold">样式粗体</span>、<span style="font-style: italic">样式斜体</span>、<code>行内代码</code> 都会尽量保留原有层次。</p>
     <h2 id="why">为什么在终端读书</h2>
     <ul>
       <li>不用离开键盘，也不打断心流。</li>
@@ -176,7 +176,7 @@ print(greet("终端读者"))`
     <p>中文折行应当自然，不应该因为词之间没有空格就把整段挤出屏幕。终端宽度改变时，阅读位置会按章内百分比近似恢复，所以重新打开窗口不会直接把你送回章首。</p>
     <table>
       <tr><th>功能</th><th>入口</th></tr>
-      <tr><td>目录</td><td>t</td></tr>
+      <tr><td><b>目录</b></td><td><i>t</i></td></tr>
       <tr><td>收藏</td><td>f / s</td></tr>
       <tr><td>返回</td><td>b</td></tr>
     </table>

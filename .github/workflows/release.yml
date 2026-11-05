@@ -62,7 +62,8 @@ jobs:
           if [ "$GOOS" = "windows" ]; then
             ext=".exe"
           fi
-          version="0.1.0+${GITHUB_SHA::7}"
+          version=$(sed -n 's/^var Version = "\(.*\)"$/\1/p' internal/buildinfo/buildinfo.go | head -n 1)
+          version="${version:-0.0.0}+${GITHUB_SHA::7}"
           for arch in amd64 arm64; do
             echo "building ${GOOS}/${arch}"
             GOARCH="$arch" CGO_ENABLED=0 go build -trimpath \

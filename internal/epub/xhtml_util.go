@@ -1,11 +1,69 @@
 package epub
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
 	"golang.org/x/net/html"
 )
+
+func styledSpan(style inlineStyle, text string) Span {
+	return Span{
+		Text:      text,
+		Bold:      style.bold,
+		Italic:    style.italic,
+		Code:      style.code,
+		Underline: style.underline,
+		Link:      style.link,
+	}
+}
+
+// applyNodeStyle merges the small subset of inline CSS that maps directly to
+// terminal attributes. Explicit normal/lighter values override inherited
+// emphasis, matching CSS cascade behaviour for nested spans.
+func applyNodeStyle(n *html.Node, style *inlineStyle) {
+	if n == nil || style == nil {
+		return
+	}
+	css := strings.ToLower(attrValue(n, "style"))
+	if css == "" {
+		return
+	}
+	for _, decl := range strings.Split(css, ";") {
+		key, val, ok := strings.Cut(decl, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(strings.ReplaceAll(val, "!important", ""))
+		switch key {
+		case "font-weight":
+			switch {
+			case val == "bold" || val == "bolder":
+				style.bold = true
+			case val == "normal" || val == "lighter":
+				style.bold = false
+			default:
+				if weight, err := strconv.Atoi(val); err == nil {
+					style.bold = weight >= 600
+				}
+			}
+		case "font-style":
+			if strings.HasPrefix(val, "italic") || strings.HasPrefix(val, "oblique") {
+				style.italic = true
+			} else if val == "normal" {
+				style.italic = false
+			}
+		case "text-decoration", "text-decoration-line":
+			if strings.Contains(val, "underline") {
+				style.underline = true
+			} else if strings.Contains(val, "none") {
+				style.underline = false
+			}
+		}
+	}
+}
 
 func (p *chapterParser) addBlock(block Block, extraAnchors []string) int {
 	idx := len(p.ch.Blocks)

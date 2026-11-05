@@ -53,6 +53,8 @@ func (b *Book) parseChapter(data []byte, index int, href string) (*Chapter, erro
 func (p *chapterParser) parseFlow(n *html.Node, ctx flowCtx) {
 	var spans []Span
 	var anchors []string
+	base := inlineStyle{}
+	applyNodeStyle(n, &base)
 	flush := func() {
 		spans = normalizeSpans(spans)
 		if hasVisibleText(spans) {
@@ -68,7 +70,7 @@ func (p *chapterParser) parseFlow(n *html.Node, ctx flowCtx) {
 		switch c.Type {
 		case html.TextNode:
 			if text := SanitizeText(c.Data); text != "" {
-				spans = append(spans, Span{Text: text})
+				spans = append(spans, styledSpan(base, text))
 			}
 		case html.ElementNode:
 			if isBlockElement(c.Data) {
@@ -86,7 +88,7 @@ func (p *chapterParser) parseFlow(n *html.Node, ctx flowCtx) {
 				p.parseFlow(c, ctx)
 				continue
 			}
-			p.collectInline(c, inlineStyle{}, &spans, &anchors)
+			p.collectInline(c, base, &spans, &anchors)
 		}
 	}
 	flush()
@@ -163,12 +165,13 @@ func (p *chapterParser) handleBlock(n *html.Node, ctx flowCtx) {
 }
 
 func (p *chapterParser) collectInlineChildren(n *html.Node, style inlineStyle) ([]Span, []string) {
+	applyNodeStyle(n, &style)
 	var spans []Span
 	var anchors []string
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		switch c.Type {
 		case html.TextNode:
-			spans = append(spans, Span{Text: SanitizeText(c.Data)})
+			spans = append(spans, styledSpan(style, SanitizeText(c.Data)))
 		case html.ElementNode:
 			p.collectInline(c, style, &spans, &anchors)
 		}
@@ -187,7 +190,7 @@ func (p *chapterParser) collectInline(n *html.Node, style inlineStyle, spans *[]
 		if alt == "" {
 			alt = "图片"
 		}
-		*spans = appendStyled(*spans, Span{Text: " [图片: " + alt + "] "})
+		*spans = appendStyled(*spans, styledSpan(style, " [图片: "+alt+"] "))
 		return
 	case "svg", "script", "style", "template":
 		return
@@ -203,11 +206,11 @@ func (p *chapterParser) collectInline(n *html.Node, style inlineStyle, spans *[]
 		style.underline = true
 		style.link = attrValue(n, "href")
 	}
+	applyNodeStyle(n, &style)
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		switch c.Type {
 		case html.TextNode:
-			sp := Span{Text: SanitizeText(c.Data), Bold: style.bold, Italic: style.italic, Code: style.code, Underline: style.underline, Link: style.link}
-			*spans = appendStyled(*spans, sp)
+			*spans = appendStyled(*spans, styledSpan(style, SanitizeText(c.Data)))
 		case html.ElementNode:
 			p.collectInline(c, style, spans, anchors)
 		}
@@ -246,12 +249,14 @@ func (p *chapterParser) parseList(n *html.Node, ctx flowCtx, ordered bool, depth
 func (p *chapterParser) collectListItemInline(li *html.Node) ([]Span, []string) {
 	var spans []Span
 	var anchors []string
+	base := inlineStyle{}
+	applyNodeStyle(li, &base)
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			switch c.Type {
 			case html.TextNode:
-				spans = append(spans, Span{Text: SanitizeText(c.Data)})
+				spans = append(spans, styledSpan(base, SanitizeText(c.Data)))
 			case html.ElementNode:
 				switch c.Data {
 				case "ul", "ol", "script", "style", "template":
@@ -263,9 +268,9 @@ func (p *chapterParser) collectListItemInline(li *html.Node) ([]Span, []string) 
 					if alt == "" {
 						alt = "图片"
 					}
-					spans = appendStyled(spans, Span{Text: " [图片: " + alt + "] "})
+					spans = appendStyled(spans, styledSpan(base, " [图片: "+alt+"] "))
 				default:
-					p.collectInline(c, inlineStyle{}, &spans, &anchors)
+					p.collectInline(c, base, &spans, &anchors)
 				}
 			}
 		}
@@ -339,7 +344,8 @@ func codeLanguage(n *html.Node) string {
 }
 
 func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
-	var rows [][]string
+	var rows [][]TableCell
+	var anchors []string
 	var walkRows func(*html.Node)
 	walkRows = func(cur *html.Node) {
 		for c := cur.FirstChild; c != nil; c = c.NextSibling {
@@ -347,11 +353,25 @@ func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
 				continue
 			}
 			if c.Data == "tr" {
-				var cells []string
+				var cells []TableCell
 				for td := c.FirstChild; td != nil; td = td.NextSibling {
-					if td.Type == html.ElementNode && (td.Data == "td" || td.Data == "th") {
-						cells = append(cells, CollapseSpace(textContent(td)))
+					if td.Type != html.ElementNode || (td.Data != "td" && td.Data != "th") {
+						continue
 					}
+					var spans []Span
+					var cellAnchors []string
+					cellStyle := inlineStyle{}
+					applyNodeStyle(td, &cellStyle)
+					for child := td.FirstChild; child != nil; child = child.NextSibling {
+						switch child.Type {
+						case html.TextNode:
+							spans = append(spans, styledSpan(cellStyle, SanitizeText(child.Data)))
+						case html.ElementNode:
+							p.collectInline(child, cellStyle, &spans, &cellAnchors)
+						}
+					}
+					cells = append(cells, TableCell{Spans: normalizeSpans(spans)})
+					anchors = append(anchors, cellAnchors...)
 				}
 				if len(cells) > 0 {
 					rows = append(rows, cells)
@@ -365,7 +385,7 @@ func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
 	if len(rows) == 0 {
 		return
 	}
-	p.addBlock(Block{Kind: BlockTable, Table: rows, Quote: ctx.quote}, nil)
+	p.addBlock(Block{Kind: BlockTable, Table: rows, Quote: ctx.quote}, anchors)
 }
 
 func (p *chapterParser) addImage(n *html.Node, quote bool) {

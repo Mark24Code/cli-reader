@@ -28,6 +28,14 @@ var (
 )
 
 func (m Model) View() string {
+	view := m.renderView()
+	if m.selection.active && m.selection.moved {
+		view = highlightSelection(view, m.selection)
+	}
+	return view
+}
+
+func (m Model) renderView() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}

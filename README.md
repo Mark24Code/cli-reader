@@ -29,7 +29,7 @@
 ## 功能
 
 - 纵向连续滚动阅读，章节边界自动衔接；上/下方向键和 PageUp/PageDown 翻动。
-- 支持鼠标：滚轮翻页；点击正文中的链接、脚注锚点或目录项即可跳转。
+- 支持鼠标：滚轮翻页；点击正文中的链接、脚注锚点或目录项即可跳转；按住左键拖动可选中文本，松开自动复制。
 - 按终端宽度实时重新排版，代码、列表、图片缩略图都会重排。
 - 小于 56 列 × 16 行时显示拉宽提示，恢复到阈值后回到原阅读位置。
 - EPUB3 `nav` 与 EPUB2 `NCX` 目录；目录弹窗支持方向键快速选择、章节/锚点跳转。
@@ -101,6 +101,22 @@ git push origin v0.1.1
 
 发布流程会把 tag 版本注入 `cli-epub-reader --version`。
 
+### 发布命令
+
+```sh
+make release                 # 交互式：显示当前版本并询问新版本
+make release VERSION=minor   # 非交互：patch / minor / major 或 1.2.3
+./scripts/release.sh patch   # 等价的脚本入口
+```
+
+`release` 会依次：
+
+1. 显示当前版本，并允许输入 `patch` / `minor` / `major` 或完整的 `x.y.z`（直接回车默认 patch）；
+2. 运行 `go vet ./...` 和全部测试，失败则中止；
+3. 更新 `internal/buildinfo/buildinfo.go` 中的版本号；
+4. 提交当前所有改动，commit 信息为 `release: vX.Y.Z`；
+5. 创建并推送 `vX.Y.Z` tag，触发 GitHub Actions 构建并发布 Release。
+
 ## 快捷键
 
 默认是**浏览模式**。按 `/`、`:` 或 `i` 进入**输入模式**，Esc 回到浏览。
@@ -131,12 +147,13 @@ git push origin v0.1.1
 | 操作 | 功能 |
 |---|---|
 | 滚轮上 / 下 | 向上 / 向下滚动 3 行 |
-| 左键点击正文链接 | 跳转到目标章节或章内锚点 |
+| 按住左键拖动 | 选中屏幕文本，松开后自动复制 |
+| 左键单击正文链接 | 跳转到目标章节或章内锚点 |
 | 左键点击目录/收藏条目 | 选中并跳转 |
 | 左键点击弹窗外部 | 关闭弹窗 |
 | 弹窗内滚轮 | 滚动目录、收藏或帮助列表 |
 
-内置链接跳转只在书内生效：指向外部网站、或目标不在阅读 spine 中的链接会在提示栏说明，不会联网打开。启用鼠标后，终端里选择文本通常需要按住 Shift（iTerm2/WezTerm 等）。
+内置链接跳转只在书内生效：指向外部网站、或目标不在阅读 spine 中的链接会在提示栏说明，不会联网打开。启用鼠标后，终端里直接拖动被程序用于选择文本；复制优先使用系统剪贴板，不可用时回退到 OSC 52。按住 Shift 拖动仍可使用终端原生选择。
 
 ### 输入模式
 
@@ -254,6 +271,7 @@ internal/state/             收藏与进度持久化
 internal/tui/               Bubble Tea 模型、命令、弹窗、布局
 internal/testepub/          示例 EPUB 生成器
 scripts/gen-demo-epub.go    生成 testdata/demo.epub
+scripts/release.sh          版本递增、提交、打 tag 并推送
 testdata/demo.epub          手测样书
 ```
 

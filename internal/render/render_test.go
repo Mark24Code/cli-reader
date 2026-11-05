@@ -97,6 +97,44 @@ func TestLinkSpansTrackCoordinates(t *testing.T) {
 	}
 }
 
+func TestEmphasisStylesPreserved(t *testing.T) {
+	book := sampleBook(t)
+	r := render.NewRenderer(book)
+
+	rc := r.RenderChapter(&book.Chapters[0], 80, render.Options{})
+	joined := strings.Join(rc.Lines, "\n")
+	for _, want := range []string{
+		"\x1b[1m粗体\x1b[0m",
+		"\x1b[3m斜体\x1b[0m",
+		"\x1b[1m样式粗体\x1b[0m",
+		"\x1b[3m样式斜体\x1b[0m",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing emphasis %q in rendered chapter", want)
+		}
+	}
+
+	// Table cells must keep inline styles instead of being flattened to text.
+	rc = r.RenderChapter(&book.Chapters[2], 80, render.Options{})
+	found := false
+	for _, line := range rc.Lines {
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "目录") || !strings.Contains(plain, "│") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "\x1b[1m") {
+			t.Fatalf("table cell lost bold style: %q", line)
+		}
+		if !strings.Contains(line, "\x1b[3m") {
+			t.Fatalf("table cell lost italic style: %q", line)
+		}
+	}
+	if !found {
+		t.Fatal("table row not found in rendered chapter")
+	}
+}
+
 func TestScrollPercent(t *testing.T) {
 	if p := render.ScrollPercent(10, 20, 0); p != 0 {
 		t.Fatalf("short chapter percent = %v", p)

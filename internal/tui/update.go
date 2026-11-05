@@ -1,6 +1,10 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"fmt"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -14,6 +18,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setNotice("已返回阅读", false)
 		}
+		return m, nil
+	case copiedMsg:
+		m.setNotice(fmt.Sprintf("已复制 %d 个字符", msg.Chars), false)
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -29,6 +36,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.selection = selectionState{}
 	key := msg.String()
 	if key == "ctrl+c" {
 		return m, tea.Quit

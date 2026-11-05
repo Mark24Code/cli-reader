@@ -38,6 +38,11 @@ type ImageRef struct {
 	External bool
 }
 
+// TableCell is the inline content of one table cell.
+type TableCell struct {
+	Spans []Span
+}
+
 // Block is the intermediate representation between XHTML and the renderer.
 type Block struct {
 	Kind    BlockKind
@@ -50,7 +55,7 @@ type Block struct {
 	Ordered bool
 	Number  int
 	Quote   bool
-	Table   [][]string
+	Table   [][]TableCell
 }
 
 // Chapter is one spine document, already parsed into blocks.

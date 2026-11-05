@@ -51,6 +51,7 @@ func (m *Model) helpLines() []string {
 		"  PgUp/PgDn/Space   整页滚动",
 		"  鼠标滚轮          翻页",
 		"  鼠标点击链接      跳转到目标章节",
+		"  鼠标拖选          复制选中文本",
 		"  ←/→ 或 h/l        上一章 / 下一章",
 		"  g / G             章首 / 章尾",
 		"  Enter             打开视口内图片",
