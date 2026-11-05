@@ -105,7 +105,7 @@ esac
 if [ -n "$repo_url" ]; then
   repo_url="${repo_url%.git}"
   echo
-  echo "已推送 $tag。Release 构建进行中："
-  echo "  $repo_url/actions"
-  echo "  $repo_url/releases/tag/$tag"
+  echo "已推送 ${tag}。Release 构建进行中："
+  echo "  ${repo_url}/actions"
+  echo "  ${repo_url}/releases/tag/${tag}"
 fi
