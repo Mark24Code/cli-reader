@@ -3,6 +3,7 @@ package epub
 import (
 	"bytes"
 	"path"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -346,46 +347,264 @@ func codeLanguage(n *html.Node) string {
 func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
 	var rows [][]TableCell
 	var anchors []string
+	var walkRows func(*html.Node, bool)
+	walkRows = func(cur *html.Node, header bool) {
+		for c := cur.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type != html.ElementNode {
+				continue
+			}
+			switch c.Data {
+			case "tr":
+				cells := p.parseTableRow(c, header, &anchors)
+				if len(cells) > 0 {
+					rows = append(rows, cells)
+				}
+			case "thead":
+				walkRows(c, true)
+			case "tbody", "tfoot":
+				walkRows(c, header)
+			case "caption", "colgroup", "col", "script", "style", "template":
+				// Captions are handled separately; presentation-only markup is skipped.
+			default:
+				// Tolerate malformed rows wrapped in extra containers, but never
+				// descend into a nested table: its rows belong to the inner table.
+				walkRows(c, header)
+			}
+		}
+	}
+	walkRows(n, false)
+
+	var caption []Span
+	if cn := firstChildElement(n, "caption"); cn != nil {
+		var captionAnchors []string
+		caption, captionAnchors = p.collectInlineChildren(cn, inlineStyle{})
+		caption = normalizeSpans(caption)
+		if !hasVisibleText(caption) {
+			caption = nil
+		} else {
+			anchors = append(anchors, captionAnchors...)
+		}
+	}
+
+	if len(rows) == 0 {
+		// A table without any rows still holds readable text in pathological
+		// documents; preserve it as a paragraph instead of dropping it.
+		spans, cellAnchors := p.collectTableCellContent(n)
+		spans = normalizeSpans(spans)
+		if hasVisibleText(spans) {
+			p.addBlock(Block{Kind: BlockParagraph, Spans: spans, Quote: ctx.quote}, append(anchors, cellAnchors...))
+		}
+		return
+	}
+	p.addBlock(Block{Kind: BlockTable, Table: rows, TableCaption: caption, Quote: ctx.quote}, anchors)
+}
+
+func (p *chapterParser) parseTableRow(tr *html.Node, header bool, anchors *[]string) []TableCell {
+	var cells []TableCell
+	for td := tr.FirstChild; td != nil; td = td.NextSibling {
+		if td.Type != html.ElementNode || (td.Data != "td" && td.Data != "th") {
+			continue
+		}
+		*anchors = append(*anchors, elementAnchorNames(td)...)
+		spans, cellAnchors := p.collectTableCellContent(td)
+		*anchors = append(*anchors, cellAnchors...)
+		cell := TableCell{
+			Spans:   normalizeSpans(spans),
+			Header:  header || td.Data == "th",
+			ColSpan: tableSpanAttr(td, "colspan"),
+			RowSpan: tableSpanAttr(td, "rowspan"),
+			Align:   tableCellAlign(td),
+		}
+		cells = append(cells, cell)
+	}
+	return cells
+}
+
+// collectTableCellContent flattens the block structure of a cell into spans,
+// using hard line breaks between paragraphs, list items and <br> elements.
+// Inline styling, links and anchors from the original markup are preserved.
+func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []string) {
+	var spans []Span
+	var anchors []string
+	base := inlineStyle{}
+	applyNodeStyle(cell, &base)
+
+	var walk func(*html.Node, inlineStyle)
+	walk = func(n *html.Node, st inlineStyle) {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.TextNode {
+				if text := SanitizeText(c.Data); text != "" {
+					spans = append(spans, styledSpan(st, text))
+				}
+				continue
+			}
+			if c.Type != html.ElementNode {
+				continue
+			}
+			anchors = append(anchors, elementAnchorNames(c)...)
+			switch c.Data {
+			case "br":
+				spans = append(spans, Span{Break: true})
+			case "ul", "ol":
+				p.collectTableCellList(c, st, 0, &spans, &anchors)
+			case "table":
+				p.collectNestedTableText(c, &spans)
+			case "pre":
+				text := strings.Trim(preText(c), "\n")
+				if text == "" {
+					continue
+				}
+				spans = append(spans, Span{Break: true})
+				for i, line := range strings.Split(text, "\n") {
+					if i > 0 {
+						spans = append(spans, Span{Break: true})
+					}
+					spans = append(spans, Span{Text: line, Code: true, Italic: st.italic})
+				}
+				spans = append(spans, Span{Break: true})
+			case "p", "div", "section", "article", "main", "aside", "header",
+				"footer", "figure", "figcaption", "blockquote":
+				childStyle := st
+				applyNodeStyle(c, &childStyle)
+				if c.Data == "blockquote" {
+					childStyle.italic = true
+				}
+				spans = append(spans, Span{Break: true})
+				walk(c, childStyle)
+				spans = append(spans, Span{Break: true})
+			case "script", "style", "template", "head":
+				// Not reading content.
+			default:
+				p.collectInline(c, st, &spans, &anchors)
+			}
+		}
+	}
+	walk(cell, base)
+	return spans, anchors
+}
+
+func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth int, spans *[]Span, anchors *[]string) {
+	ordered := n.Data == "ol"
+	number := 0
+	indent := strings.Repeat("  ", depth)
+	for li := n.FirstChild; li != nil; li = li.NextSibling {
+		if li.Type != html.ElementNode || li.Data != "li" {
+			continue
+		}
+		number++
+		*anchors = append(*anchors, elementAnchorNames(li)...)
+		marker := "• "
+		if ordered {
+			marker = strconv.Itoa(number) + ". "
+		}
+		*spans = append(*spans, Span{Break: true}, styledSpan(st, indent+marker))
+		var nested []*html.Node
+		for c := li.FirstChild; c != nil; c = c.NextSibling {
+			switch c.Type {
+			case html.TextNode:
+				if text := SanitizeText(c.Data); text != "" {
+					*spans = append(*spans, styledSpan(st, text))
+				}
+			case html.ElementNode:
+				switch c.Data {
+				case "ul", "ol":
+					nested = append(nested, c)
+				case "br":
+					*spans = append(*spans, Span{Break: true})
+				case "p", "div":
+					*spans = append(*spans, Span{Break: true})
+					p.collectInline(c, st, spans, anchors)
+					*spans = append(*spans, Span{Break: true})
+				case "script", "style", "template":
+				default:
+					p.collectInline(c, st, spans, anchors)
+				}
+			}
+		}
+		for _, sub := range nested {
+			p.collectTableCellList(sub, st, depth+1, spans, anchors)
+		}
+	}
+	*spans = append(*spans, Span{Break: true})
+}
+
+// collectNestedTableText turns a table nested inside a cell into readable
+// one-row-per-line text, since the terminal cell cannot host another grid.
+func (p *chapterParser) collectNestedTableText(table *html.Node, spans *[]Span) {
+	var rows [][]string
 	var walkRows func(*html.Node)
 	walkRows = func(cur *html.Node) {
 		for c := cur.FirstChild; c != nil; c = c.NextSibling {
 			if c.Type != html.ElementNode {
 				continue
 			}
-			if c.Data == "tr" {
-				var cells []TableCell
+			switch c.Data {
+			case "tr":
+				var cells []string
 				for td := c.FirstChild; td != nil; td = td.NextSibling {
 					if td.Type != html.ElementNode || (td.Data != "td" && td.Data != "th") {
 						continue
 					}
-					var spans []Span
-					var cellAnchors []string
-					cellStyle := inlineStyle{}
-					applyNodeStyle(td, &cellStyle)
-					for child := td.FirstChild; child != nil; child = child.NextSibling {
-						switch child.Type {
-						case html.TextNode:
-							spans = append(spans, styledSpan(cellStyle, SanitizeText(child.Data)))
-						case html.ElementNode:
-							p.collectInline(child, cellStyle, &spans, &cellAnchors)
-						}
+					if text := CollapseSpace(textContent(td)); text != "" {
+						cells = append(cells, text)
 					}
-					cells = append(cells, TableCell{Spans: normalizeSpans(spans)})
-					anchors = append(anchors, cellAnchors...)
 				}
 				if len(cells) > 0 {
 					rows = append(rows, cells)
 				}
-				continue
+			case "thead", "tbody", "tfoot":
+				walkRows(c)
 			}
-			walkRows(c)
 		}
 	}
-	walkRows(n)
+	walkRows(table)
 	if len(rows) == 0 {
 		return
 	}
-	p.addBlock(Block{Kind: BlockTable, Table: rows, Quote: ctx.quote}, anchors)
+	*spans = append(*spans, Span{Break: true})
+	for _, row := range rows {
+		*spans = append(*spans, Span{Text: strings.Join(row, " │ ")})
+		*spans = append(*spans, Span{Break: true})
+	}
+}
+
+func tableSpanAttr(n *html.Node, key string) int {
+	v := strings.TrimSpace(attrValue(n, key))
+	if v == "" {
+		return 1
+	}
+	nv, err := strconv.Atoi(v)
+	if err != nil || nv < 1 {
+		return 1
+	}
+	if nv > 100 {
+		nv = 100
+	}
+	return nv
+}
+
+func tableCellAlign(n *html.Node) string {
+	align := strings.ToLower(strings.TrimSpace(attrValue(n, "align")))
+	if align == "" {
+		css := strings.ToLower(attrValue(n, "style"))
+		for _, decl := range strings.Split(css, ";") {
+			key, val, ok := strings.Cut(decl, ":")
+			if !ok || strings.TrimSpace(key) != "text-align" {
+				continue
+			}
+			align = strings.TrimSpace(strings.ReplaceAll(val, "!important", ""))
+			break
+		}
+	}
+	switch align {
+	case "center", "middle":
+		return "center"
+	case "right", "end":
+		return "right"
+	case "left", "start", "justify":
+		return "left"
+	}
+	return ""
 }
 
 func (p *chapterParser) addImage(n *html.Node, quote bool) {

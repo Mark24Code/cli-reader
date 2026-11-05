@@ -248,24 +248,6 @@ func (r *Renderer) renderListItem(b *epub.Block, width int) renderedBlock {
 	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderTable(b *epub.Block, width int) renderedBlock {
-	var out []string
-	var links [][]lineLink
-	for _, row := range b.Table {
-		var spans []epub.Span
-		for i, cell := range row {
-			if i > 0 {
-				spans = append(spans, epub.Span{Text: "  │  "})
-			}
-			spans = append(spans, cell.Spans...)
-		}
-		lines, lineLinks := wrapStyledLinesWithLinks(spans, width, Style{}, "  ", "  ")
-		out = append(out, lines...)
-		links = append(links, lineLinks...)
-	}
-	return renderedBlock{Lines: out, Links: links}
-}
-
 func renderRule(width int) []string {
 	n := width - 4
 	if n > 72 {

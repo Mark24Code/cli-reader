@@ -40,22 +40,27 @@ type ImageRef struct {
 
 // TableCell is the inline content of one table cell.
 type TableCell struct {
-	Spans []Span
+	Spans   []Span
+	Header  bool   // <th> or a cell inside <thead>
+	ColSpan int    // number of columns covered; 1 when unset
+	RowSpan int    // number of rows covered; 1 when unset
+	Align   string // "left", "center" or "right"; empty means default
 }
 
 // Block is the intermediate representation between XHTML and the renderer.
 type Block struct {
-	Kind    BlockKind
-	Spans   []Span
-	Level   int    // heading level
-	Code    string // raw code for BlockCode
-	Lang    string // detected/declared code language
-	Image   *ImageRef
-	Depth   int // list nesting depth, starting at 1
-	Ordered bool
-	Number  int
-	Quote   bool
-	Table   [][]TableCell
+	Kind         BlockKind
+	Spans        []Span
+	Level        int    // heading level
+	Code         string // raw code for BlockCode
+	Lang         string // detected/declared code language
+	Image        *ImageRef
+	Depth        int // list nesting depth, starting at 1
+	Ordered      bool
+	Number       int
+	Quote        bool
+	Table        [][]TableCell
+	TableCaption []Span
 }
 
 // Chapter is one spine document, already parsed into blocks.

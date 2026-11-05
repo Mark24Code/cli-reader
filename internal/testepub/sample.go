@@ -175,10 +175,16 @@ print(greet("终端读者"))`
     <img src="images/tall.png" alt="一幅竖向渐变色图片"/>
     <p>中文折行应当自然，不应该因为词之间没有空格就把整段挤出屏幕。终端宽度改变时，阅读位置会按章内百分比近似恢复，所以重新打开窗口不会直接把你送回章首。</p>
     <table>
-      <tr><th>功能</th><th>入口</th></tr>
-      <tr><td><b>目录</b></td><td><i>t</i></td></tr>
-      <tr><td>收藏</td><td>f / s</td></tr>
-      <tr><td>返回</td><td>b</td></tr>
+      <caption>快捷键一览</caption>
+      <thead>
+        <tr><th>功能</th><th>入口</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>目录</b></td><td><i>t</i></td></tr>
+        <tr><td>收藏</td><td>f / s</td></tr>
+        <tr><td>返回</td><td>b</td></tr>
+        <tr><td colspan="2" style="text-align: center">更多快捷键见帮助面板</td></tr>
+      </tbody>
     </table>
     <p>最后一页。你可以按 <code>G</code> 到章尾，或输入“目录”回到目录弹窗。</p>
   </section>
