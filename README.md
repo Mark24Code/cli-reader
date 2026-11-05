@@ -252,3 +252,10 @@ internal/testepub/          示例 EPUB 生成器
 scripts/gen-demo-epub.go    生成 testdata/demo.epub
 testdata/demo.epub          手测样书
 ```
+
+## 作者
+
+- **Mark24Code**
+- 邮箱：mark.zhangyoung@gmail.com
+- 主页：https://github.com/Mark24Code/cli-epub-reader
+

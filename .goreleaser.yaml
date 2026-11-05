@@ -33,10 +33,17 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
       - README.md
+      - AUTHORS
       - testdata/demo.epub
 
 checksum:
   name_template: checksums.txt
+
+release:
+  footer: |
+    ---
+    **作者**：Mark24Code · <mark.zhangyoung@gmail.com>
+    **主页**：https://github.com/Mark24Code/cli-epub-reader
 
 changelog:
   sort: asc
