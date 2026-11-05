@@ -7,9 +7,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/imgterm"
-	"claude-epub-reader/internal/state"
+	"cli-epub-reader/internal/buildinfo"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/imgterm"
+	"cli-epub-reader/internal/state"
 )
 
 type modalKind int
@@ -19,6 +20,7 @@ const (
 	modalTOC
 	modalFavorites
 	modalHelp
+	modalAbout
 )
 
 type modalState struct {
@@ -58,10 +60,12 @@ func (m *Model) helpLines() []string {
 		"  b                 返回上一个位置",
 		"  / 或 i            输入对话命令",
 		"  ? / F1            帮助",
+		"  a                 关于 / 作者信息",
 		"  q                 退出",
 		"",
 		"对话命令",
 		"  help / 帮助        打开本帮助",
+		"  about / 关于       作者与版本信息",
 		"  toc / 目录         打开目录",
 		"  下一章 / 上一章    章节导航",
 		"  goto 3 / 跳到第三章 按章节号跳转",
@@ -80,6 +84,29 @@ func (m *Model) helpLines() []string {
 		"  " + m.store.Path,
 	}
 	return lines
+}
+
+func (m Model) aboutLines(width int) []string {
+	version := buildinfo.Version
+	if version == "" {
+		version = "dev"
+	}
+	homepage := buildinfo.Homepage
+	if width > 0 && ansi.StringWidth("  "+homepage) > width {
+		homepage = strings.TrimPrefix(strings.TrimPrefix(homepage, "https://"), "http://")
+	}
+	return []string{
+		"cli-epub-reader",
+		"版本  " + version,
+		"命令  cli-epub-reader",
+		"",
+		"作者  " + buildinfo.Author,
+		"邮箱  " + buildinfo.Email,
+		"主页  " + homepage,
+		"",
+		"Claude 风格的非官方终端 EPUB 阅读器。",
+		"不冒充 Anthropic 产品，不联网，也不调用任何模型。",
+	}
 }
 
 func (m Model) viewModal(base string) string {
@@ -105,6 +132,9 @@ func (m Model) viewModal(base string) string {
 	case modalHelp:
 		title = "帮助"
 		footer = "↑↓ 或 PgUp/PgDn 滚动 · Esc 关闭"
+	case modalAbout:
+		title = "关于"
+		footer = "作者信息 · Esc 关闭"
 	}
 	body := m.modalBody(contentW, rows)
 
@@ -127,26 +157,34 @@ func (m Model) modalBody(contentW, rows int) []string {
 	case modalFavorites:
 		body = m.favoriteRows(contentW, rows)
 	case modalHelp:
-		all := m.helpLines()
-		off := m.modal.offset
-		if off < 0 {
-			off = 0
-		}
-		if off >= len(all) {
-			off = max(0, len(all)-rows)
-		}
-		end := off + rows
-		if end > len(all) {
-			end = len(all)
-		}
-		for _, line := range all[off:end] {
-			body = append(body, padPlain(fitPlain(line, contentW), contentW))
-		}
+		body = m.pagedLines(m.helpLines(), contentW, rows)
+	case modalAbout:
+		body = m.pagedLines(m.aboutLines(contentW), contentW, rows)
 	}
 	if len(body) == 0 {
 		body = append(body, padPlain(fitPlain("（空）", contentW), contentW))
 	}
 	return body
+}
+
+// pagedLines returns the visible slice of a scrollable plain-text modal.
+func (m Model) pagedLines(all []string, contentW, rows int) []string {
+	off := m.modal.offset
+	if off < 0 {
+		off = 0
+	}
+	if off >= len(all) {
+		off = max(0, len(all)-rows)
+	}
+	end := off + rows
+	if end > len(all) {
+		end = len(all)
+	}
+	var out []string
+	for _, line := range all[off:end] {
+		out = append(out, padPlain(fitPlain(line, contentW), contentW))
+	}
+	return out
 }
 
 func (m Model) modalBoxWidth() int {

@@ -12,6 +12,7 @@ const (
 	ActionNone ActionKind = iota
 	ActionUnknown
 	ActionHelp
+	ActionAbout
 	ActionTOC
 	ActionNextChapter
 	ActionPrevChapter
@@ -59,6 +60,11 @@ func ParseCommand(raw string) Action {
 	if lower == "?" || lower == "？" || lower == "help" || lower == "帮助" || lower == "说明" ||
 		lower == "快捷键" || strings.Contains(lower, "怎么用") || strings.Contains(lower, "help me") {
 		action.Kind = ActionHelp
+		return action
+	}
+	if containsAny(lower, "关于", "作者", "程序信息", "版本信息", "about", "author", "credits") ||
+		lower == "a" {
+		action.Kind = ActionAbout
 		return action
 	}
 	if containsAny(lower, "收藏列表", "我的收藏", "所有收藏", "favorites", "favourites", "bookmarks", "favs") {

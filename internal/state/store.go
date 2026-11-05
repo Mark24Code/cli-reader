@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-epub-reader/internal/epub"
+	"cli-epub-reader/internal/epub"
 )
 
 const (
@@ -52,9 +52,9 @@ type Store struct {
 	corrupt bool
 }
 
-// DefaultPath returns the config path, honouring CLAUDE_EPUB_READER_STATE.
+// DefaultPath returns the config path, honouring CLI_EPUB_READER_STATE.
 func DefaultPath() string {
-	if p := strings.TrimSpace(os.Getenv("CLAUDE_EPUB_READER_STATE")); p != "" {
+	if p := strings.TrimSpace(os.Getenv("CLI_EPUB_READER_STATE")); p != "" {
 		return p
 	}
 	dir, err := os.UserConfigDir()
@@ -66,7 +66,7 @@ func DefaultPath() string {
 			dir = "."
 		}
 	}
-	return filepath.Join(dir, "claude-epub-reader", "state.json")
+	return filepath.Join(dir, "cli-epub-reader", "state.json")
 }
 
 // Load reads a store. A missing file is not an error. Corrupt JSON yields an

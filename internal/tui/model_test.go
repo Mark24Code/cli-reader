@@ -9,10 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/imgterm"
-	"claude-epub-reader/internal/state"
-	"claude-epub-reader/internal/testepub"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/imgterm"
+	"cli-epub-reader/internal/state"
+	"cli-epub-reader/internal/testepub"
 )
 
 func testModel(t *testing.T) Model {
@@ -60,6 +60,9 @@ func TestModelLayoutAndResize(t *testing.T) {
 	m := testModel(t)
 	assertViewWidth(t, m)
 	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "cli-epub-reader") {
+		t.Fatalf("header missing project name:\n%s", view)
+	}
 	if !strings.Contains(view, "终端里的 Claude") {
 		t.Fatalf("header missing book title:\n%s", view)
 	}
@@ -124,6 +127,37 @@ func TestModelLayoutAndResize(t *testing.T) {
 		t.Fatal("expected recovery from tooSmall")
 	}
 	assertViewWidth(t, m)
+}
+
+func TestAboutModal(t *testing.T) {
+	m := testModel(t)
+	m = sendKey(t, m, keyRunes("a"))
+	if m.modal.kind != modalAbout {
+		t.Fatalf("a did not open about, got %v", m.modal.kind)
+	}
+	assertViewWidth(t, m)
+	view := ansi.Strip(m.View())
+	for _, want := range []string{
+		"关于", "cli-epub-reader", "Mark24Code", "mark.zhangyoung@gmail.com",
+		"github.com/Mark24Code/cli-epub-reader",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("about view missing %q:\n%s", want, view)
+		}
+	}
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.modal.kind != modalNone {
+		t.Fatal("Esc did not close about")
+	}
+
+	m = sendKey(t, m, keyRunes("/"))
+	for _, r := range "关于" {
+		m = sendKey(t, m, keyRunes(string(r)))
+	}
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.modal.kind != modalAbout {
+		t.Fatalf("关于 command did not open about, got %v", m.modal.kind)
+	}
 }
 
 func TestCommandHelpAndTOC(t *testing.T) {

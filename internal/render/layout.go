@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/theme"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/theme"
 )
 
 type cell struct {

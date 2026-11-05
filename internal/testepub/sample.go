@@ -49,7 +49,7 @@ func BuildSample(opts Options) ([]byte, error) {
 	opf := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid">urn:uuid:claude-epub-reader-demo</dc:identifier>
+    <dc:identifier id="bookid">urn:uuid:cli-epub-reader-demo</dc:identifier>
     <dc:title>终端里的 Claude</dc:title>
     <dc:creator>Mark24</dc:creator>
     <dc:language>zh-CN</dc:language>
@@ -92,7 +92,7 @@ func BuildSample(opts Options) ([]byte, error) {
 
 	ncx := `<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head><meta name="dtb:uid" content="urn:uuid:claude-epub-reader-demo"/></head>
+  <head><meta name="dtb:uid" content="urn:uuid:cli-epub-reader-demo"/></head>
   <docTitle><text>终端里的 Claude</text></docTitle>
   <navMap>
     <navPoint id="n1" playOrder="1"><navLabel><text>第一章 开篇</text></navLabel><content src="ch1.xhtml"/>

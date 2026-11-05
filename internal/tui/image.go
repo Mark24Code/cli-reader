@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"claude-epub-reader/internal/imgterm"
-	"claude-epub-reader/internal/render"
+	"cli-epub-reader/internal/imgterm"
+	"cli-epub-reader/internal/render"
 )
 
 func (m *Model) findImage(index int) *render.ImageSpan {
@@ -56,7 +56,7 @@ func (m *Model) openImage(index int) tea.Cmd {
 		m.setNotice("准备高清图片失败: "+err.Error(), true)
 		return nil
 	}
-	f, err := os.CreateTemp("", "claude-epub-image-*.img")
+	f, err := os.CreateTemp("", "cli-epub-reader-image-*.img")
 	if err != nil {
 		m.setNotice("创建临时图片失败: "+err.Error(), true)
 		return nil

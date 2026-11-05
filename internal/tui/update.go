@@ -100,6 +100,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.goBack()
 	case "?", "f1", "ctrl+h":
 		m.openModal(modalHelp)
+	case "a":
+		m.openModal(modalAbout)
 	case "enter":
 		if m.findImage(0) != nil {
 			return m, m.openImage(0)
@@ -180,7 +182,7 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd) {
 		case "d", "delete", "backspace":
 			m.deleteFavorite(m.modal.cursor)
 		}
-	case modalHelp:
+	case modalHelp, modalAbout:
 		switch key {
 		case "up", "k":
 			if m.modal.offset > 0 {
@@ -195,7 +197,7 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd) {
 		case "home", "g":
 			m.modal.offset = 0
 		case "end", "G":
-			m.modal.offset = max(0, len(m.helpLines())-m.modalListRows())
+			m.modal.offset = max(0, len(m.scrollModalLines())-m.modalListRows())
 		}
 		m.clampModalOffset()
 	}
@@ -208,8 +210,8 @@ func (m *Model) clampModalOffset() {
 		m.ensureModalCursorVisible()
 	case modalFavorites:
 		m.ensureModalCursorVisible()
-	case modalHelp:
-		maxOff := max(0, len(m.helpLines())-m.modalListRows())
+	case modalHelp, modalAbout:
+		maxOff := max(0, len(m.scrollModalLines())-m.modalListRows())
 		if m.modal.offset < 0 {
 			m.modal.offset = 0
 		}
@@ -217,6 +219,14 @@ func (m *Model) clampModalOffset() {
 			m.modal.offset = maxOff
 		}
 	}
+}
+
+// scrollModalLines returns the full text of a scrollable modal.
+func (m Model) scrollModalLines() []string {
+	if m.modal.kind == modalAbout {
+		return m.aboutLines(m.width)
+	}
+	return m.helpLines()
 }
 
 func (m *Model) modalMove(delta int) {

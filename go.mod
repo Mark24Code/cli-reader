@@ -1,4 +1,4 @@
-module claude-epub-reader
+module cli-epub-reader
 
 go 1.26.0
 

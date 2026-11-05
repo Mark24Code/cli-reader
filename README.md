@@ -1,9 +1,9 @@
-# Claude EPUB Reader
+# cli-epub-reader
 
 一个用 Go 写的终端 EPUB 阅读器：外观模拟 Claude Code 的终端界面，正文却是真实的 EPUB 内容。
 
 ```text
-✻ Claude EPUB · 《终端里的 Claude》                              ▰▰▰▱▱▱▱▱ 33% · 2/3
+✻ cli-epub-reader · 《终端里的 Claude》                              ▰▰▰▱▱▱▱▱ 33% · 2/3
 ────────────────────────────────────────────────────────────────────────────
   ✻ Claude  ·  正在阅读
 
@@ -44,6 +44,7 @@
   - 在 iTerm2/Kitty/Ghostty/WezTerm 中按 Enter 用终端原生协议打开高清图；
   - iTerm2 使用 OSC 1337 原始图片协议，不是字符画。
 - 浏览模式和对话输入模式分离，单键快捷方式不会和打字冲突。
+- 内置「关于」页面（`a`），展示版本、作者与项目主页。
 - 简单关键词对话命令，中英文都支持，不需要模型。
 
 ## 环境
@@ -80,11 +81,11 @@ go run . testdata/demo.epub
 状态文件默认位置：
 
 ```text
-macOS: ~/Library/Application Support/claude-epub-reader/state.json
-其他系统: os.UserConfigDir()/claude-epub-reader/state.json
+macOS: ~/Library/Application Support/cli-epub-reader/state.json
+其他系统: os.UserConfigDir()/cli-epub-reader/state.json
 ```
 
-也可用环境变量 `CLAUDE_EPUB_READER_STATE` 覆盖。
+也可用环境变量 `CLI_EPUB_READER_STATE` 覆盖。
 
 ### 平台构建与 Release
 
@@ -121,6 +122,7 @@ git push origin v0.1.1
 | `b` | 返回上一个跳转位置 |
 | `/`、`:`、`i` | 进入输入模式 |
 | `?`、`F1` | 帮助 |
+| `a` | 关于（作者与版本信息） |
 | `q` | 退出 |
 | `Ctrl+C` | 退出（任何模式） |
 
@@ -158,6 +160,7 @@ git push origin v0.1.1
 | 命令示例 | 功能 |
 |---|---|
 | `help`、`帮助`、`?` | 打开帮助 |
+| `about`、`关于`、`作者` | 打开关于页面 |
 | `目录`、`toc`、`大纲` | 打开目录弹窗 |
 | `下一章`、`next`、`n` | 下一章 |
 | `上一章`、`prev`、`p` | 上一章 |
@@ -243,6 +246,7 @@ make sample
 
 ```text
 main.go                     CLI 与 __view-image 子命令分派
+internal/buildinfo/         版本与作者信息
 internal/epub/              ZIP/OPF/spine/XHTML/TOC 解析
 internal/render/            响应式排版、Chroma 高亮、图片缩略图
 internal/imgterm/           终端图片协议、图片准备、查看器

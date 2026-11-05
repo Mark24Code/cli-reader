@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/render"
-	"claude-epub-reader/internal/testepub"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/render"
+	"cli-epub-reader/internal/testepub"
 )
 
 func sampleBook(t *testing.T) *epub.Book {

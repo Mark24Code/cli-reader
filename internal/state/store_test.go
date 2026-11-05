@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"claude-epub-reader/internal/epub"
+	"cli-epub-reader/internal/epub"
 )
 
 func TestStoreRoundTripAndToggles(t *testing.T) {

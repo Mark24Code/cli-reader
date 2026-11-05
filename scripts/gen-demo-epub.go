@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"claude-epub-reader/internal/testepub"
+	"cli-epub-reader/internal/testepub"
 )
 
 func main() {

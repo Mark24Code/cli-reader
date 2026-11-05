@@ -19,7 +19,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X cli-epub-reader/internal/buildinfo.Version={{ .Version }}
 
 archives:
   - id: default

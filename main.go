@@ -10,15 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/imgterm"
-	"claude-epub-reader/internal/state"
-	"claude-epub-reader/internal/tui"
+	"cli-epub-reader/internal/buildinfo"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/imgterm"
+	"cli-epub-reader/internal/state"
+	"cli-epub-reader/internal/tui"
 )
-
-// version is overwritten at release time with
-// -ldflags="-X main.version=<tag>".
-var version = "0.1.0"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__view-image" {
@@ -47,7 +44,7 @@ func run(args []string) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Println("cli-epub-reader", version)
+		fmt.Println("cli-epub-reader", buildinfo.Version)
 		return 0
 	}
 	if fs.NArg() != 1 {

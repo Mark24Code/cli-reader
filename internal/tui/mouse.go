@@ -60,7 +60,7 @@ func (m *Model) scrollModal(lines int) {
 	switch m.modal.kind {
 	case modalTOC, modalFavorites:
 		m.modalMove(lines)
-	case modalHelp:
+	case modalHelp, modalAbout:
 		m.modal.offset += lines
 		m.clampModalOffset()
 	}

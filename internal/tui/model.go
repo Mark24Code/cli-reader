@@ -8,10 +8,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/imgterm"
-	"claude-epub-reader/internal/render"
-	"claude-epub-reader/internal/state"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/imgterm"
+	"cli-epub-reader/internal/render"
+	"cli-epub-reader/internal/state"
 )
 
 const (
@@ -392,6 +392,8 @@ func (m *Model) runAction(a Action) tea.Cmd {
 		return nil
 	case ActionHelp:
 		m.openModal(modalHelp)
+	case ActionAbout:
+		m.openModal(modalAbout)
 	case ActionTOC:
 		m.openModal(modalTOC)
 	case ActionFavorites:

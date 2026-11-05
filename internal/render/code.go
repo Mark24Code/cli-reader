@@ -6,7 +6,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 
-	"claude-epub-reader/internal/theme"
+	"cli-epub-reader/internal/theme"
 )
 
 type codeCell struct {

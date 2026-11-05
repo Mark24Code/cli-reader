@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/theme"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/theme"
 )
 
 // ImageProvider supplies embedded image bytes.

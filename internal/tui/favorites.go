@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"claude-epub-reader/internal/state"
+	"cli-epub-reader/internal/state"
 )
 
 func (m *Model) togglePositionFavorite() {

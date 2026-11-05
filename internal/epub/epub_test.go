@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"claude-epub-reader/internal/epub"
-	"claude-epub-reader/internal/testepub"
+	"cli-epub-reader/internal/epub"
+	"cli-epub-reader/internal/testepub"
 )
 
 func openSample(t *testing.T, opts testepub.Options) *epub.Book {
