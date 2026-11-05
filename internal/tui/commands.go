@@ -16,6 +16,8 @@ const (
 	ActionTOC
 	ActionNextChapter
 	ActionPrevChapter
+	ActionNextSection
+	ActionPrevSection
 	ActionGotoChapter
 	ActionPageDown
 	ActionPageUp
@@ -110,11 +112,19 @@ func ParseCommand(raw string) Action {
 		action.Kind = ActionBottom
 		return action
 	}
-	if containsAny(lower, "下一章", "下章", "后一章", "下一节", "next chapter", "next chap") || lower == "n" || lower == "next" {
+	if containsAny(lower, "下一节", "下节", "下一小节", "next section") || lower == "ns" {
+		action.Kind = ActionNextSection
+		return action
+	}
+	if containsAny(lower, "上一节", "上节", "上一小节", "previous section", "prev section") || lower == "ps" {
+		action.Kind = ActionPrevSection
+		return action
+	}
+	if containsAny(lower, "下一章", "下章", "后一章", "next chapter", "next chap") || lower == "n" || lower == "next" {
 		action.Kind = ActionNextChapter
 		return action
 	}
-	if containsAny(lower, "上一章", "上章", "前一章", "上一节", "previous chapter", "prev chapter", "last chapter") ||
+	if containsAny(lower, "上一章", "上章", "前一章", "previous chapter", "prev chapter", "last chapter") ||
 		lower == "p" || lower == "prev" || lower == "previous" {
 		action.Kind = ActionPrevChapter
 		return action

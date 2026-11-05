@@ -52,21 +52,54 @@ type Store struct {
 	corrupt bool
 }
 
-// DefaultPath returns the config path, honouring CLI_EPUB_READER_STATE.
+// DefaultPath returns ~/.cli-epub-reader/state.json, honouring
+// CLI_EPUB_READER_STATE for an explicit override.
 func DefaultPath() string {
 	if p := strings.TrimSpace(os.Getenv("CLI_EPUB_READER_STATE")); p != "" {
 		return p
 	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".cli-epub-reader", "state.json")
+	}
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "cli-epub-reader", "state.json")
+	}
+	return filepath.Join(".", ".cli-epub-reader", "state.json")
+}
+
+// legacyPath is the config-directory location used by older releases.
+func legacyPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
-		home, herr := os.UserHomeDir()
-		if herr == nil {
-			dir = filepath.Join(home, ".config")
-		} else {
-			dir = "."
-		}
+		return ""
 	}
 	return filepath.Join(dir, "cli-epub-reader", "state.json")
+}
+
+// MigrateLegacy copies an old state file to the default path the first time
+// the new location is used. The legacy file is left in place, so nothing is
+// lost if the user wants to go back. It never overwrites an existing file.
+func MigrateLegacy(path string) {
+	migrateLegacyFile(path, legacyPath())
+}
+
+func migrateLegacyFile(path, legacy string) {
+	if path == "" || legacy == "" || legacy == path {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	raw, err := os.ReadFile(legacy)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		_ = os.Remove(path)
+	}
 }
 
 // Load reads a store. A missing file is not an error. Corrupt JSON yields an

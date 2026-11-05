@@ -186,6 +186,70 @@ func TestLayoutWidthsAndModals(t *testing.T) {
 	}
 }
 
+func TestArrowKeysNavigateAdjacentSections(t *testing.T) {
+	m := testModel(t)
+	if m.chapter != 0 {
+		t.Fatalf("initial chapter = %d", m.chapter)
+	}
+
+	// → must first move to the subsection inside the current chapter, not
+	// skip straight to the next spine document.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.chapter != 0 {
+		t.Fatalf("→ should stay in chapter 1 for its subsection, got chapter %d", m.chapter)
+	}
+	if !strings.Contains(m.notice, "为什么在终端读书") {
+		t.Fatalf("→ did not land on the first subsection: %q", m.notice)
+	}
+	anchor, ok := m.content.LineForAnchor("why")
+	if !ok {
+		t.Fatal("missing anchor for the first subsection")
+	}
+	want := anchor
+	if maxOff := len(m.content.Lines) - m.bodyHeight(); want > maxOff {
+		want = maxOff
+	}
+	if want < 0 {
+		want = 0
+	}
+	if m.viewport.YOffset != want {
+		t.Fatalf("→ offset = %d, want %d (anchor line %d)", m.viewport.YOffset, want, anchor)
+	}
+
+	// The next section belongs to chapter 2.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.chapter != 1 {
+		t.Fatalf("→ from the last section should reach chapter 2, got %d", m.chapter)
+	}
+
+	// ← walks back to the same subsection.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.chapter != 0 || !strings.Contains(m.notice, "为什么在终端读书") {
+		t.Fatalf("← did not return to the subsection: chapter=%d notice=%q", m.chapter, m.notice)
+	}
+
+	// ← again returns to the chapter's opening section...
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.chapter != 0 || m.viewport.YOffset != 0 {
+		t.Fatalf("← should reach the chapter start: chapter=%d offset=%d", m.chapter, m.viewport.YOffset)
+	}
+	// ...and then stops at the very first section.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+	if !strings.Contains(m.notice, "已经是第一节") {
+		t.Fatalf("← at the first section should stop: %q", m.notice)
+	}
+
+	// n/p still switch whole chapters.
+	m = sendKey(t, m, keyRunes("n"))
+	if m.chapter != 1 {
+		t.Fatalf("n should switch to the next chapter, got %d", m.chapter)
+	}
+	m = sendKey(t, m, keyRunes("p"))
+	if m.chapter != 0 {
+		t.Fatalf("p should switch to the previous chapter, got %d", m.chapter)
+	}
+}
+
 func TestScrollAcrossChapterBoundaries(t *testing.T) {
 	m := testModel(t)
 	m.gotoBottom()

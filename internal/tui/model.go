@@ -55,6 +55,11 @@ type Model struct {
 	chapter int
 	content *render.RenderedChapter
 
+	// tocCursor remembers which TOC entry ←/→last landed on. It lets section
+	// navigation keep stepping even when a short chapter clamps the viewport so
+	// anchor lines cannot be compared directly. -1 means "derive from scroll".
+	tocCursor int
+
 	initialHref    string
 	initialPercent float64
 	hasInitial     bool
@@ -81,6 +86,7 @@ func New(book *epub.Book, store *state.Store, key string, protocol imgterm.Proto
 		viewport:   viewport.New(0, 0),
 		input:      textinput.New(),
 		cmdHistPos: -1,
+		tocCursor:  -1,
 	}
 	m.bookState = store.Book(key, book.Path, book.Title, book.Author)
 	if idx := book.ChapterByHref(m.bookState.Last.Href); idx >= 0 {
@@ -271,6 +277,7 @@ func (m *Model) goToChapter(index int, fragment string, percent float64, atBotto
 		m.pushHistory()
 	}
 	m.chapter = index
+	m.tocCursor = -1
 	m.renderAt(percent, fragment, atBottom, false)
 	ch := m.book.Chapters[index]
 	m.setNotice(fmt.Sprintf("第 %d/%d 章 · %s", index+1, len(m.book.Chapters), ch.Title), false)
@@ -289,6 +296,7 @@ func (m *Model) goBack() {
 		return
 	}
 	m.chapter = idx
+	m.tocCursor = -1
 	m.renderAt(loc.Percent, "", false, false)
 	m.setNotice(fmt.Sprintf("已返回 · 第 %d 章", idx+1), false)
 }
@@ -309,10 +317,119 @@ func (m *Model) prevChapter(atBottom bool) {
 	m.goToChapter(m.chapter-1, "", 0, atBottom, true)
 }
 
+// tocIndex returns the TOC entry that best describes the current section. When
+// ←/→ has already landed on an entry it keeps that cursor; otherwise the
+// position is derived from the scroll offset.
+func (m *Model) tocIndex() int {
+	if m.tocCursor >= 0 && m.tocCursor < len(m.book.TOC) &&
+		m.book.TOC[m.tocCursor].Chapter == m.chapter {
+		return m.tocCursor
+	}
+	return m.tocIndexForPosition()
+}
+
+// tocIndexForPosition returns the TOC entry that best describes the visible
+// reading position: the last entry in the current chapter whose anchor sits at
+// or above the top of the viewport. It returns -1 when the book has no usable
+// TOC entry for the current chapter.
+func (m *Model) tocIndexForPosition() int {
+	if m.content == nil || len(m.book.TOC) == 0 {
+		return -1
+	}
+	top := m.viewport.YOffset
+	if m.viewport.AtBottom() && len(m.content.Lines) > m.bodyHeight() {
+		// The bottom of a long chapter is the end of its last section, even
+		// though that section's anchor may still be below the scrolling limit.
+		top = len(m.content.Lines)
+	}
+	best, bestLine := -1, -1
+	firstInChapter := -1
+	for i, entry := range m.book.TOC {
+		if entry.Chapter != m.chapter {
+			continue
+		}
+		if firstInChapter < 0 {
+			firstInChapter = i
+		}
+		line := 0
+		if entry.Fragment != "" {
+			anchor, ok := m.content.LineForAnchor(entry.Fragment)
+			if !ok {
+				continue
+			}
+			line = anchor
+		}
+		if line <= top && line >= bestLine {
+			best, bestLine = i, line
+		}
+	}
+	if best >= 0 {
+		return best
+	}
+	return firstInChapter
+}
+
+// nextSection moves to the next TOC entry, which usually is a subsection
+// rather than a whole spine document.
+func (m *Model) nextSection() {
+	idx := m.tocIndex()
+	if idx < 0 {
+		m.nextChapter(false)
+		return
+	}
+	for i := idx + 1; i < len(m.book.TOC); i++ {
+		if m.book.TOC[i].Chapter >= 0 {
+			m.goToTOCEntry(i)
+			return
+		}
+	}
+	m.setNotice("已经是最后一节", false)
+}
+
+// prevSection moves to the previous TOC entry.
+func (m *Model) prevSection() {
+	idx := m.tocIndex()
+	if idx < 0 {
+		m.prevChapter(false)
+		return
+	}
+	for i := idx - 1; i >= 0; i-- {
+		if m.book.TOC[i].Chapter >= 0 {
+			m.goToTOCEntry(i)
+			return
+		}
+	}
+	m.setNotice("已经是第一节", false)
+}
+
+func (m *Model) goToTOCEntry(index int) {
+	if index < 0 || index >= len(m.book.TOC) {
+		return
+	}
+	entry := m.book.TOC[index]
+	if entry.Chapter < 0 || entry.Chapter >= len(m.book.Chapters) {
+		m.setNotice("该目录项指向正文之外的内容", true)
+		return
+	}
+	if entry.Chapter == m.chapter {
+		m.pushHistory()
+		m.renderAt(0, entry.Fragment, false, false)
+	} else {
+		m.goToChapter(entry.Chapter, entry.Fragment, 0, false, true)
+	}
+	m.tocCursor = index
+	title := entry.Title
+	if title == "" {
+		title = m.book.Chapters[entry.Chapter].Title
+	}
+	m.setNotice(fmt.Sprintf("第 %d/%d 章 · %s", entry.Chapter+1, len(m.book.Chapters), title), false)
+}
+
 func (m *Model) scrollDown(page bool) {
 	if m.content == nil {
 		return
 	}
+	m.tocCursor = -1
 	if m.viewport.AtBottom() {
 		m.nextChapter(false)
 		return
@@ -329,6 +446,7 @@ func (m *Model) scrollUp(page bool) {
 	if m.content == nil {
 		return
 	}
+	m.tocCursor = -1
 	if m.viewport.AtTop() {
 		m.prevChapter(true)
 		return
@@ -345,6 +463,7 @@ func (m *Model) gotoTop() {
 	if m.content == nil {
 		return
 	}
+	m.tocCursor = -1
 	m.setOffset(0)
 	m.syncLast()
 }
@@ -353,6 +472,7 @@ func (m *Model) gotoBottom() {
 	if m.content == nil {
 		return
 	}
+	m.tocCursor = -1
 	m.setOffset(len(m.content.Lines))
 	m.syncLast()
 }
@@ -403,6 +523,10 @@ func (m *Model) runAction(a Action) tea.Cmd {
 		m.nextChapter(false)
 	case ActionPrevChapter:
 		m.prevChapter(false)
+	case ActionNextSection:
+		m.nextSection()
+	case ActionPrevSection:
+		m.prevSection()
 	case ActionGotoChapter:
 		if a.Chapter < 1 || a.Chapter > len(m.book.Chapters) {
 			m.setNotice(fmt.Sprintf("章节号应在 1–%d 之间", len(m.book.Chapters)), true)

@@ -21,7 +21,7 @@
 ────────────────────────────────────────────────────────────────────────────
   ✻ 输入 help 查看操作 · Enter 打开可见图片
   ❯ / 输入消息或命令                                                     浏览
-  ↑↓ 滚动 · ←→ 章节 · Enter 图片 · t 目录 · f 收藏 · b 返回 · / 对话 · ? 帮助
+  ↑↓ 滚动 · ←→ 小节 · Enter 图片 · t 目录 · f 收藏 · b 返回 · / 对话 · ? 帮助
 ```
 
 > 这是 Claude 风格的非官方本地阅读工具，不冒充 Anthropic 产品；不联网，也不调用任何模型。
@@ -81,11 +81,10 @@ go run . testdata/demo.epub
 状态文件默认位置：
 
 ```text
-macOS: ~/Library/Application Support/cli-epub-reader/state.json
-其他系统: os.UserConfigDir()/cli-epub-reader/state.json
+~/.cli-epub-reader/state.json
 ```
 
-也可用环境变量 `CLI_EPUB_READER_STATE` 覆盖。
+也可用 `--state-file <path>` 或环境变量 `CLI_EPUB_READER_STATE` 覆盖。旧版本把状态放在系统配置目录（macOS 为 `~/Library/Application Support/cli-epub-reader/`，Linux 为 `~/.config/cli-epub-reader/`）；首次使用新路径且新文件不存在时，会自动复制旧文件过来，旧文件保留不删。
 
 ### 平台构建与 Release
 
@@ -127,7 +126,8 @@ make release VERSION=minor   # 非交互：patch / minor / major 或 1.2.3
 |---|---|
 | `↑` / `↓`、`k` / `j` | 逐行滚动 |
 | `PgUp` / `PgDn`、`Space` | 整页滚动 |
-| `←` / `→`、`h` / `l` | 上一章 / 下一章 |
+| `←` / `→`、`h` / `l` | 上一节 / 下一节（按目录中的相邻条目，包括子章节） |
+| `n` / `p` | 下一章 / 上一章（按 spine 文件切换） |
 | `g` / `G`、`Home` / `End` | 章首 / 章尾 |
 | `Enter` | 打开当前视口内的图片；没有图片时聚焦输入框 |
 | `o` | 打开当前视口内的图片 |
@@ -179,8 +179,10 @@ make release VERSION=minor   # 非交互：patch / minor / major 或 1.2.3
 | `help`、`帮助`、`?` | 打开帮助 |
 | `about`、`关于`、`作者` | 打开关于页面 |
 | `目录`、`toc`、`大纲` | 打开目录弹窗 |
-| `下一章`、`next`、`n` | 下一章 |
-| `上一章`、`prev`、`p` | 上一章 |
+| `下一章`、`next`、`n` | 下一章（spine 文件） |
+| `上一章`、`prev`、`p` | 上一章（spine 文件） |
+| `下一节`、`next section` | 下一节（目录中的相邻条目） |
+| `上一节`、`prev section` | 上一节（目录中的相邻条目） |
 | `向下`、`向下滚动`、`page down` | 向下滚一页 |
 | `向上`、`page up` | 向上滚一页 |
 | `顶部`、`章首`、`top` | 当前章开头 |

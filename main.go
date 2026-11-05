@@ -74,6 +74,10 @@ func run(args []string) int {
 	path := strings.TrimSpace(*stateFile)
 	if path == "" {
 		path = state.DefaultPath()
+		if strings.TrimSpace(os.Getenv("CLI_EPUB_READER_STATE")) == "" {
+			// Older releases kept the state in the system config directory.
+			state.MigrateLegacy(path)
+		}
 	}
 	store := state.Load(path)
 	key := state.BookKey(bookPath)

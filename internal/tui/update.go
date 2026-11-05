@@ -91,8 +91,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.gotoBottom()
 		m.setNotice("已到章尾", false)
 	case "left", "h":
-		m.prevChapter(false)
-	case "right", "l", "n":
+		m.prevSection()
+	case "right", "l":
+		m.nextSection()
+	case "n":
 		m.nextChapter(false)
 	case "p":
 		m.prevChapter(false)
