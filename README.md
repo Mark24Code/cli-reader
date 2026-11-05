@@ -86,6 +86,20 @@ macOS: ~/Library/Application Support/claude-epub-reader/state.json
 
 也可用环境变量 `CLAUDE_EPUB_READER_STATE` 覆盖。
 
+### 平台构建与 Release
+
+GitHub Actions 配置在 `.github/workflows/release.yml`：
+
+- 推送到 `main`：运行 `go vet`、`go test`，并在 Linux / macOS / Windows 上分别构建 `amd64`、`arm64` 二进制，产物保存在本次 Action 的 Artifacts 中。
+- 推送 `v*` tag：测试通过后由 GoReleaser 构建全部平台，并自动创建 GitHub Release，附带 `tar.gz`（Windows 为 `zip`）、`README.md`、示例书和 `checksums.txt`。
+
+```sh
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+发布流程会把 tag 版本注入 `cli-epub-reader --version`。
+
 ## 快捷键
 
 默认是**浏览模式**。按 `/`、`:` 或 `i` 进入**输入模式**，Esc 回到浏览。

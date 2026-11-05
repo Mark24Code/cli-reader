@@ -16,7 +16,9 @@ import (
 	"claude-epub-reader/internal/tui"
 )
 
-const version = "0.1.0"
+// version is overwritten at release time with
+// -ldflags="-X main.version=<tag>".
+var version = "0.1.0"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__view-image" {
