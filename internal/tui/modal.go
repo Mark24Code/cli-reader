@@ -105,8 +105,7 @@ func (m Model) aboutLines(width int) []string {
 		"邮箱  " + buildinfo.Email,
 		"主页  " + homepage,
 		"",
-		"Claude 风格的非官方终端 EPUB 阅读器。",
-		"不冒充 Anthropic 产品，不联网，也不调用任何模型。",
+		"终端 EPUB 阅读器。",
 	}
 }
 
