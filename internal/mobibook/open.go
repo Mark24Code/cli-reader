@@ -9,8 +9,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
+	"golang.org/x/exp/mmap"
 	"golang.org/x/text/encoding/charmap"
 
 	"cli-reader/internal/book"
@@ -19,11 +21,10 @@ import (
 )
 
 const (
-	maxFileBytes       = 128 << 20
-	maxTextBytes       = 64 << 20
-	maxImageBytes      = 32 << 20
-	maxTotalImageBytes = 128 << 20
-	noImageIndex       = 0xFFFFFFFF
+	maxFileBytes  = 128 << 20
+	maxTextBytes  = 64 << 20
+	maxImageBytes = 32 << 20
+	noImageIndex  = 0xFFFFFFFF
 )
 
 var (
@@ -42,18 +43,27 @@ func Open(name string) (*book.Book, error) {
 	if st.Size() > maxFileBytes {
 		return nil, fmt.Errorf("MOBI/AZW3 超过 %d MiB 限制", maxFileBytes>>20)
 	}
-	data, err := os.ReadFile(name)
+	mapped, err := mmap.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	db, err := parsePalmDB(data)
+	keepOpen := false
+	defer func() {
+		if !keepOpen {
+			_ = mapped.Close()
+		}
+	}()
+	db, err := parsePalmDBReader(mapped, int64(mapped.Len()))
 	if err != nil {
 		return nil, err
 	}
 	if len(db.Records) < 2 {
 		return nil, fmt.Errorf("MOBI 记录不足")
 	}
-	rec0 := db.Records[0].Data
+	rec0, err := db.recordData(0)
+	if err != nil {
+		return nil, err
+	}
 	pdh, err := parsePalmDocHeader(rec0)
 	if err != nil {
 		return nil, err
@@ -117,14 +127,16 @@ func Open(name string) (*book.Book, error) {
 	}
 	htmlText = preprocessHTML(htmlText, mh)
 
-	images, imageWarning := buildImages(db, mh)
-	if imageWarning != "" {
-		b.Warnings = append(b.Warnings, imageWarning)
+	if mh != nil && mh.FirstImageIndex != noImageIndex && int(mh.FirstImageIndex) < len(db.Records) {
+		b.SetImageProvider(&mobiImages{
+			db:    db,
+			first: int(mh.FirstImageIndex),
+			cache: make(map[int][]byte),
+		})
 	}
-	b.SetImageProvider(images)
 
 	baseHref := "mobi:content"
-	res, err := htmlimport.Parse([]byte(htmlText), htmlimport.Options{
+	parseOpts := htmlimport.Options{
 		Href:                   baseHref,
 		GenerateHeadingAnchors: true,
 		ResolveImage: func(ref *book.ImageRef) {
@@ -135,7 +147,11 @@ func Open(name string) (*book.Book, error) {
 				}
 			}
 		},
-	})
+	}
+	parse := func() (htmlimport.Result, error) {
+		return htmlimport.Parse([]byte(htmlText), parseOpts)
+	}
+	res, err := parse()
 	if err != nil {
 		return nil, fmt.Errorf("解析 MOBI 正文失败: %w", err)
 	}
@@ -148,12 +164,56 @@ func Open(name string) (*book.Book, error) {
 	if len(chapters) == 0 {
 		chapters = []book.Chapter{*res.Chapter}
 	}
+	large := len(chapters) > 3 || len(htmlText) > 2<<20
+	chunked := false
+	if large && len(chapters) == 1 {
+		if chunks := book.ChunkChapter(res.Chapter, 250, baseHref); len(chunks) > 1 {
+			chapters = chunks
+			toc = nil
+			chunked = true
+		}
+	}
+	lazy := large || chunked
+	if lazy {
+		for i := range chapters {
+			chapters[i].Blocks = nil
+			chapters[i].Anchors = nil
+		}
+	}
 	b.Chapters = chapters
 	b.TOC = toc
 	b.SetLinkResolver(func(base, raw string) book.LinkTarget {
 		return resolveMOBILink(b, base, raw)
 	})
 	b.EnsureTOC()
+	b.SetCloser(mapped.Close)
+	keepOpen = true
+	if lazy {
+		b.SetChapterLoader(func(i int) error {
+			r, err := parse()
+			if err != nil {
+				return err
+			}
+			level := chooseSplitLevel(r.Headings)
+			var part *book.Chapter
+			if chunked {
+				part = book.ChunkChapterPart(r.Chapter, 250, i, baseHref)
+			} else if level > 0 {
+				part = book.SplitPartByHeadings(r.Chapter, r.Headings, level, i, baseHref)
+			} else if i == 0 {
+				part = r.Chapter
+			}
+			if part == nil {
+				return fmt.Errorf("章节索引无效")
+			}
+			target := &b.Chapters[i]
+			target.Blocks = part.Blocks
+			target.Anchors = part.Anchors
+			target.Heading = part.Heading
+			target.DocTitle = part.DocTitle
+			return nil
+		})
+	}
 	return b, nil
 }
 
@@ -185,10 +245,17 @@ func decodeTextRecords(db *palmDB, pdh palmDocHeader, mh *mobiHeader) ([]byte, e
 		}
 		cdics := make([][]byte, 0, n-1)
 		for i := 1; i < n; i++ {
-			cdics = append(cdics, db.Records[start+i].Data)
+			data, err := db.recordData(start + i)
+			if err != nil {
+				return nil, err
+			}
+			cdics = append(cdics, data)
 		}
-		var err error
-		huff, err = newHuffReader(db.Records[start].Data, cdics)
+		huffData, err := db.recordData(start)
+		if err != nil {
+			return nil, err
+		}
+		huff, err = newHuffReader(huffData, cdics)
 		if err != nil {
 			return nil, err
 		}
@@ -196,9 +263,12 @@ func decodeTextRecords(db *palmDB, pdh palmDocHeader, mh *mobiHeader) ([]byte, e
 
 	out := make([]byte, 0, pdh.TextLength)
 	for i := 1; i <= count; i++ {
-		payload := trimTrailingData(db.Records[i].Data, flags)
+		record, err := db.recordData(i)
+		if err != nil {
+			return nil, err
+		}
+		payload := trimTrailingData(record, flags)
 		var part []byte
-		var err error
 		switch pdh.Compression {
 		case 1:
 			part = payload
@@ -279,32 +349,54 @@ func preprocessHTML(text string, mh *mobiHeader) string {
 	return text
 }
 
-func buildImages(db *palmDB, mh *mobiHeader) (*book.MapImages, string) {
-	images := book.NewMapImages()
-	if mh == nil || mh.FirstImageIndex == noImageIndex || int(mh.FirstImageIndex) >= len(db.Records) {
-		return images, ""
+type mobiImages struct {
+	db    *palmDB
+	first int
+
+	mu    sync.Mutex
+	cache map[int][]byte
+	bytes int64
+}
+
+const mobiImageCacheBytes = 32 << 20
+
+func (m *mobiImages) ImageBytes(key string) ([]byte, string, error) {
+	if !strings.HasPrefix(key, "mobi:img/") {
+		return nil, "", fmt.Errorf("未知 MOBI 图片键 %q", key)
 	}
-	total := 0
-	skipped := 0
-	for i := int(mh.FirstImageIndex); i < len(db.Records); i++ {
-		data := db.Records[i].Data
-		if len(data) < 4 || !isImageData(data) {
-			continue
-		}
-		if len(data) > maxImageBytes {
-			skipped++
-			continue
-		}
-		if total+len(data) > maxTotalImageBytes {
-			return images, "MOBI 图片总量超过限制，已跳过后续图片"
-		}
-		total += len(data)
-		images.Put(fmt.Sprintf("mobi:img/%d", i), data)
+	index, err := strconv.Atoi(strings.TrimPrefix(key, "mobi:img/"))
+	if err != nil || index < m.first || index >= len(m.db.Records) {
+		return nil, "", fmt.Errorf("MOBI 图片记录无效")
 	}
-	if skipped > 0 {
-		return images, fmt.Sprintf("%d 张图片超过大小限制，已跳过", skipped)
+	m.mu.Lock()
+	if data, ok := m.cache[index]; ok {
+		m.mu.Unlock()
+		return data, book.MediaTypeFor("", data), nil
 	}
-	return images, ""
+	m.mu.Unlock()
+
+	data, err := m.db.recordData(index)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > maxImageBytes {
+		return nil, "", fmt.Errorf("MOBI 图片超过大小限制")
+	}
+	if len(data) < 4 || !isImageData(data) {
+		return nil, "", fmt.Errorf("MOBI 记录不是图片")
+	}
+	mt := book.MediaTypeFor("", data)
+	if mt == "application/octet-stream" {
+		return nil, "", fmt.Errorf("MOBI 图片格式不受支持")
+	}
+
+	m.mu.Lock()
+	if m.bytes+int64(len(data)) <= mobiImageCacheBytes {
+		m.cache[index] = data
+		m.bytes += int64(len(data))
+	}
+	m.mu.Unlock()
+	return data, mt, nil
 }
 
 func isImageData(data []byte) bool {
@@ -449,10 +541,21 @@ func resolveMOBILink(b *book.Book, base, raw string) book.LinkTarget {
 		raw = raw[:i]
 	}
 	if raw == "" {
-		for i := range b.Chapters {
-			if _, ok := b.Chapters[i].Anchors[target.Fragment]; ok {
-				target.Chapter = i
+		// TOC headings cover almost all internal fragment links; avoid parsing
+		// every chapter just to look for an anchor.
+		for _, entry := range b.TOC {
+			if entry.Fragment == target.Fragment && entry.Chapter >= 0 {
+				target.Chapter = entry.Chapter
 				return target
+			}
+		}
+		for i := range b.Chapters {
+			ch := b.EnsureChapter(i)
+			if ch != nil {
+				if _, ok := ch.Anchors[target.Fragment]; ok {
+					target.Chapter = i
+					return target
+				}
 			}
 		}
 		target.Chapter = b.ChapterByHref(base)

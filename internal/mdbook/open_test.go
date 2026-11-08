@@ -1,6 +1,7 @@
 package mdbook
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,38 @@ package main
 	}
 	if len(refs) != 2 || refs[0].Path != "a.png" || !refs[1].External {
 		t.Fatalf("images = %#v", refs)
+	}
+}
+
+func TestLargeMarkdownSplitsAndLoadsLazily(t *testing.T) {
+	var sb strings.Builder
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(&sb, "# Part %d\n\n", i)
+		for j := 0; j < 200; j++ {
+			sb.WriteString("paragraph text\n\n")
+		}
+	}
+	p := filepath.Join(t.TempDir(), "large.md")
+	if err := os.WriteFile(p, []byte(sb.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Chapters) < 2 {
+		t.Fatalf("large Markdown was not split: %d", len(b.Chapters))
+	}
+	if len(b.TOC) < 2 {
+		t.Fatalf("TOC = %#v", b.TOC)
+	}
+	if b.Chapters[0].Blocks != nil {
+		t.Fatal("large Markdown should load chapters lazily")
+	}
+	for i := range b.Chapters {
+		if len(b.EnsureChapter(i).Blocks) == 0 {
+			t.Fatalf("chapter %d has no blocks", i)
+		}
 	}
 }
 

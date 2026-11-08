@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"cli-reader/internal/book"
 	"cli-reader/internal/textdecode"
@@ -74,14 +76,38 @@ func Open(name string) (*book.Book, error) {
 	if !hadHeadings {
 		b.Warnings = append(b.Warnings, "没有识别到章节标题，已按长度自动分节")
 	}
+	lazy := len(sections) > 3 || len(decoded.Text) > 1<<20
 	for i, sec := range sections {
-		ch := buildChapter(i, sec)
-		b.Chapters = append(b.Chapters, ch)
+		if lazy {
+			href := fmt.Sprintf("txt:section-%04d", i+1)
+			anchor := fmt.Sprintf("sec-%d", i+1)
+			b.Chapters = append(b.Chapters, book.Chapter{
+				Index:   i,
+				Href:    href,
+				Title:   sec.title,
+				Heading: sec.title,
+				Anchors: map[string]int{anchor: 0},
+			})
+			continue
+		}
+		b.Chapters = append(b.Chapters, buildChapter(i, sec))
 	}
 	if len(b.Chapters) == 0 {
 		return nil, fmt.Errorf("TXT 中没有可阅读的正文")
 	}
 	b.EnsureTOC()
+	if lazy {
+		b.SetChapterLoader(func(i int) error {
+			if i < 0 || i >= len(sections) {
+				return fmt.Errorf("章节索引无效")
+			}
+			full := buildChapter(i, sections[i])
+			target := &b.Chapters[i]
+			target.Blocks = full.Blocks
+			target.Anchors = full.Anchors
+			return nil
+		})
+	}
 	return b, nil
 }
 
@@ -307,15 +333,26 @@ func buildBlocks(lines []string) []book.Block {
 }
 
 func joinParagraph(lines []string) string {
-	var out string
+	var out []byte
+	prev := ""
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		out = book.JoinLines(out, line)
+		if prev != "" {
+			last, _ := utf8.DecodeLastRuneInString(prev)
+			first, _ := utf8.DecodeRuneInString(line)
+			if last == '-' && unicode.IsLower(first) {
+				out = out[:len(out)-1]
+			} else if !book.IsCJK(last) && !book.IsCJK(first) {
+				out = append(out, ' ')
+			}
+		}
+		out = append(out, line...)
+		prev = line
 	}
-	return book.SanitizeText(strings.TrimSpace(out))
+	return book.SanitizeText(strings.TrimSpace(string(out)))
 }
 
 func isQuoteLine(line string) bool {

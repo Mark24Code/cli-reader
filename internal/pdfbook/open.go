@@ -26,7 +26,7 @@ const (
 	maxPageTextBytes   = 1 << 20
 	maxPageTextTotal   = 128 << 20
 	maxImageBytes      = 32 << 20
-	maxTotalImageBytes = 128 << 20
+	maxTotalImageBytes = 64 << 20
 )
 
 var (
@@ -63,9 +63,14 @@ func Open(name string) (*book.Book, error) {
 	if err != nil {
 		return nil, err
 	}
+	closeOnReturn := true
+	defer func() {
+		if closeOnReturn {
+			_ = f.Close()
+		}
+	}()
 	r, err := pdf.NewReader(f, st.Size())
 	if err != nil {
-		f.Close()
 		lower := strings.ToLower(err.Error())
 		if err == pdf.ErrInvalidPassword || strings.Contains(lower, "encrypt") ||
 			strings.Contains(lower, "password") || strings.Contains(lower, "decrypt") {
@@ -73,7 +78,6 @@ func Open(name string) (*book.Book, error) {
 		}
 		return nil, fmt.Errorf("无法解析 PDF: %w", err)
 	}
-	defer f.Close()
 
 	numPages := r.NumPage()
 	if numPages <= 0 {
@@ -101,6 +105,45 @@ func Open(name string) (*book.Book, error) {
 	b.Warnings = append(b.Warnings, imageWarnings...)
 	if images != nil {
 		b.SetImageProvider(images)
+	}
+
+	// Large PDFs keep the reader open and extract page text on demand, so only
+	// the pages around the current one occupy memory. Small PDFs stay eager to
+	// keep tests and simple documents trivially inspectable.
+	if numPages > 30 {
+		for n := 1; n <= numPages; n++ {
+			b.Chapters = append(b.Chapters, book.Chapter{
+				Index: n - 1,
+				Href:  fmt.Sprintf("pdf:page-%04d", n),
+				Title: fmt.Sprintf("第 %d 页", n),
+			})
+		}
+		b.SetChapterLoader(func(i int) error {
+			n := i + 1
+			blocks, textLen, garbled := extractPage(r, n)
+			for _, ref := range imageRefs[n] {
+				refCopy := ref
+				blocks = append(blocks, book.Block{Kind: book.BlockImage, Image: &refCopy})
+			}
+			if len(blocks) == 0 {
+				msg := "（本页没有可提取的文字）"
+				if garbled {
+					msg = "（本页文本编码无法识别，已跳过）"
+				}
+				blocks = append(blocks, book.Block{
+					Kind:  book.BlockParagraph,
+					Spans: []book.Span{{Text: msg}},
+				})
+			}
+			target := &b.Chapters[i]
+			target.Blocks = blocks
+			target.PageMode = textLen == 0 && len(imageRefs[n]) > 0
+			return nil
+		})
+		b.SetCloser(f.Close)
+		closeOnReturn = false
+		b.EnsureTOC()
+		return b, nil
 	}
 
 	totalText := 0

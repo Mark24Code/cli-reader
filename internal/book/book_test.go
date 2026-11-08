@@ -1,10 +1,53 @@
 package book
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestLazyChapterLRU(t *testing.T) {
+	b := &Book{Chapters: make([]Chapter, 5)}
+	for i := range b.Chapters {
+		b.Chapters[i].Href = fmt.Sprintf("ch%d", i)
+	}
+	loads := 0
+	b.SetChapterLoader(func(i int) error {
+		loads++
+		b.Chapters[i].Blocks = []Block{{Kind: BlockParagraph, Spans: []Span{{Text: "x"}}}}
+		return nil
+	})
+	for i := 0; i < 5; i++ {
+		if ch := b.EnsureChapter(i); ch == nil {
+			t.Fatalf("EnsureChapter(%d) = nil", i)
+		}
+	}
+	if loads != 5 {
+		t.Fatalf("loads = %d", loads)
+	}
+	for i := 0; i < 2; i++ {
+		if b.Chapters[i].Blocks != nil {
+			t.Fatalf("chapter %d should have been evicted", i)
+		}
+	}
+	for i := 2; i < 5; i++ {
+		if b.Chapters[i].Blocks == nil {
+			t.Fatalf("chapter %d should be loaded", i)
+		}
+	}
+
+	b.EnsureChapter(0)
+	if loads != 6 {
+		t.Fatalf("loads after reload = %d", loads)
+	}
+	if b.Chapters[0].Blocks == nil {
+		t.Fatal("chapter 0 did not reload")
+	}
+	if b.Chapters[2].Blocks != nil {
+		t.Fatal("oldest chapter should be evicted again")
+	}
+}
 
 func TestJoinLines(t *testing.T) {
 	cases := []struct{ a, b, want string }{

@@ -48,7 +48,7 @@ const (
 	pageRenderDPI        = 150
 	pageRenderMaxSide    = 2000
 	pageImageMaxBytes    = 32 << 20
-	pageImageCacheBytes  = 128 << 20
+	pageImageCacheBytes  = 32 << 20
 	pageRenderTimeout    = 60 * time.Second
 	pageImageKeyPrefix   = "pdfpage:"
 	extractedPagePattern = "_page_"
@@ -179,6 +179,7 @@ type pageImageProvider struct {
 	renderMu sync.Mutex
 	mu       sync.Mutex
 	cache    map[int][]byte
+	order    []int
 	bytes    int64
 }
 
@@ -189,6 +190,13 @@ func (p *pageImageProvider) ImageBytes(key string) ([]byte, string, error) {
 	}
 	p.mu.Lock()
 	if data, ok := p.cache[n]; ok {
+		// Move the hit to the end so frequently revisited pages survive.
+		for i, page := range p.order {
+			if page == n {
+				p.order = append(append(p.order[:i], p.order[i+1:]...), n)
+				break
+			}
+		}
 		p.mu.Unlock()
 		return data, "image/png", nil
 	}
@@ -199,12 +207,20 @@ func (p *pageImageProvider) ImageBytes(key string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	p.mu.Lock()
-	if p.bytes+int64(len(data)) <= pageImageCacheBytes {
-		p.cache[n] = data
-		p.bytes += int64(len(data))
+	if old, exists := p.cache[n]; exists {
+		p.bytes -= int64(len(old))
 	} else {
-		p.cache = map[int][]byte{n: data}
-		p.bytes = int64(len(data))
+		p.order = append(p.order, n)
+	}
+	p.cache[n] = data
+	p.bytes += int64(len(data))
+	for p.bytes > pageImageCacheBytes && len(p.order) > 1 {
+		old := p.order[0]
+		p.order = p.order[1:]
+		if oldData, ok := p.cache[old]; ok {
+			p.bytes -= int64(len(oldData))
+			delete(p.cache, old)
+		}
 	}
 	p.mu.Unlock()
 	return data, "image/png", nil

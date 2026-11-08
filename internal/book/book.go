@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 )
 
 // ImageProvider supplies raw image bytes for a provider-specific key.
@@ -49,7 +50,21 @@ type Book struct {
 	files  FileProvider
 	links  LinkResolver
 	closer func() error
+
+	chapterLoader ChapterLoader
+	chapterMu     sync.Mutex
+	loaded        []bool
+	loadOrder     []int
+	maxLoaded     int
 }
+
+// ChapterLoader parses a chapter's blocks on demand. It must fill in
+// Chapters[index].Blocks/Anchors (and may update Heading/DocTitle).
+type ChapterLoader func(index int) error
+
+// LoadedChapterLimit is the number of parsed chapters kept in memory for lazy
+// books.
+const LoadedChapterLimit = 3
 
 // SetImageProvider installs the loader's image source.
 func (b *Book) SetImageProvider(p ImageProvider) { b.images = p }
@@ -85,6 +100,81 @@ func (b *Book) ReadFile(name string) ([]byte, error) {
 		return nil, errors.New("没有文件数据源")
 	}
 	return b.files.ReadFile(name)
+}
+
+// SetChapterLoader enables lazy chapter parsing. Only the most recently used
+// chapters (LoadedChapterLimit) keep their blocks in memory.
+func (b *Book) SetChapterLoader(loader ChapterLoader) {
+	b.chapterMu.Lock()
+	defer b.chapterMu.Unlock()
+	b.chapterLoader = loader
+	b.loaded = make([]bool, len(b.Chapters))
+	b.loadOrder = nil
+	b.maxLoaded = LoadedChapterLimit
+	for i := range b.Chapters {
+		if b.Chapters[i].Blocks != nil {
+			b.loaded[i] = true
+			b.loadOrder = append(b.loadOrder, i)
+		}
+	}
+	b.evictLocked()
+}
+
+// EnsureChapter returns a chapter with blocks ready to render, loading it on
+// demand for lazy books.
+func (b *Book) EnsureChapter(index int) *Chapter {
+	if index < 0 || index >= len(b.Chapters) {
+		return nil
+	}
+	b.chapterMu.Lock()
+	defer b.chapterMu.Unlock()
+	if b.chapterLoader == nil {
+		return &b.Chapters[index]
+	}
+	if !b.loaded[index] {
+		if err := b.chapterLoader(index); err != nil {
+			b.Warnings = append(b.Warnings,
+				fmt.Sprintf("加载章节失败（第 %d 节）: %v", index+1, err))
+		}
+		b.loaded[index] = true
+	}
+	b.touchLocked(index)
+	b.evictLocked()
+	return &b.Chapters[index]
+}
+
+func (b *Book) touchLocked(index int) {
+	for i, v := range b.loadOrder {
+		if v == index {
+			b.loadOrder = append(b.loadOrder[:i], b.loadOrder[i+1:]...)
+			break
+		}
+	}
+	b.loadOrder = append(b.loadOrder, index)
+}
+
+func (b *Book) evictLocked() {
+	if b.maxLoaded <= 0 || len(b.loadOrder) <= b.maxLoaded {
+		return
+	}
+	keep := make(map[int]bool, b.maxLoaded)
+	for _, idx := range b.loadOrder[len(b.loadOrder)-b.maxLoaded:] {
+		keep[idx] = true
+	}
+	newOrder := make([]int, 0, b.maxLoaded)
+	for _, idx := range b.loadOrder {
+		if keep[idx] {
+			newOrder = append(newOrder, idx)
+			continue
+		}
+		if b.loaded[idx] {
+			ch := &b.Chapters[idx]
+			ch.Blocks = nil
+			ch.Anchors = nil
+			b.loaded[idx] = false
+		}
+	}
+	b.loadOrder = newOrder
 }
 
 // ChapterByHref returns the chapter index for a logical path or pseudo-href.

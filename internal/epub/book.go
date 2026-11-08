@@ -229,6 +229,12 @@ func (l *loader) loadPackage(b *book.Book) error {
 		}
 	}
 
+	type spineSource struct {
+		href string
+		id   string
+	}
+	var sources []spineSource
+	var spineBytes uint64
 	for _, ref := range pkg.Spine.Items {
 		item, ok := manifest[ref.IDRef]
 		if !ok {
@@ -244,21 +250,38 @@ func (l *loader) loadPackage(b *book.Book) error {
 			b.Warnings = append(b.Warnings, fmt.Sprintf("跳过非 XHTML spine 项 %q (%s)", zp, item.MediaType))
 			continue
 		}
-		data, err := l.readZip(zp, maxChapterBytes)
-		if err != nil {
-			b.Warnings = append(b.Warnings, fmt.Sprintf("读取章节失败 %q: %v", zp, err))
-			continue
+		if f := l.findZipFile(zp); f != nil {
+			spineBytes += f.UncompressedSize64
 		}
-		ch, err := l.parseChapter(data, len(b.Chapters), zp)
-		if err != nil {
-			b.Warnings = append(b.Warnings, fmt.Sprintf("解析章节失败 %q: %v", zp, err))
-			continue
-		}
-		ch.ID = ref.IDRef
-		b.Chapters = append(b.Chapters, *ch)
+		sources = append(sources, spineSource{href: zp, id: ref.IDRef})
+		b.Chapters = append(b.Chapters, book.Chapter{
+			Index: len(b.Chapters),
+			ID:    ref.IDRef,
+			Href:  zp,
+		})
 	}
 	if len(b.Chapters) == 0 {
 		return fmt.Errorf("EPUB 中没有可阅读的 spine 章节")
+	}
+	// Parse small books eagerly (keeps simple documents and tests predictable);
+	// larger books load one chapter at a time.
+	lazy := len(b.Chapters) > 3 || spineBytes > 2<<20
+	if !lazy {
+		for i := range sources {
+			data, err := l.readZip(sources[i].href, maxChapterBytes)
+			if err != nil {
+				b.Warnings = append(b.Warnings, fmt.Sprintf("读取章节失败 %q: %v", sources[i].href, err))
+				continue
+			}
+			ch, err := l.parseChapter(data, i, sources[i].href)
+			if err != nil {
+				b.Warnings = append(b.Warnings, fmt.Sprintf("解析章节失败 %q: %v", sources[i].href, err))
+				continue
+			}
+			ch.ID = sources[i].id
+			ch.Index = i
+			b.Chapters[i] = *ch
+		}
 	}
 
 	var toc []book.TOCEntry
@@ -280,6 +303,43 @@ func (l *loader) loadPackage(b *book.Book) error {
 	}
 	b.TOC = toc
 	b.EnsureTOC()
+	if lazy {
+		b.SetChapterLoader(func(i int) error {
+			if i < 0 || i >= len(sources) {
+				return fmt.Errorf("章节索引无效")
+			}
+			data, err := l.readZip(sources[i].href, maxChapterBytes)
+			if err != nil {
+				return err
+			}
+			parsed, err := l.parseChapter(data, i, sources[i].href)
+			if err != nil {
+				return err
+			}
+			target := &b.Chapters[i]
+			target.Blocks = parsed.Blocks
+			target.Anchors = parsed.Anchors
+			target.Heading = parsed.Heading
+			target.DocTitle = parsed.DocTitle
+			base := strings.TrimSuffix(path.Base(target.Href), path.Ext(target.Href))
+			if target.Title == "" || target.Title == base {
+				switch {
+				case parsed.Heading != "":
+					target.Title = parsed.Heading
+				case parsed.DocTitle != "":
+					target.Title = parsed.DocTitle
+				default:
+					target.Title = base
+				}
+				for j := range b.TOC {
+					if b.TOC[j].Chapter == i && (b.TOC[j].Title == "" || b.TOC[j].Title == base) {
+						b.TOC[j].Title = target.Title
+					}
+				}
+			}
+			return nil
+		})
+	}
 	return nil
 }
 

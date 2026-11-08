@@ -855,7 +855,7 @@ func (v *viewer) render() {
 			v.haveFrame = false
 			return
 		}
-		if len(v.cache) > 24 {
+		if len(v.cache) > 8 {
 			v.cache = make(map[string]imgterm.Prepared)
 		}
 		v.cache[key] = prepared

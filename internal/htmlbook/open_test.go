@@ -1,6 +1,7 @@
 package htmlbook
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,69 @@ func TestOpenHTML(t *testing.T) {
 	}
 	if refs[2].Path != "" {
 		t.Fatalf("escaping image should have no path: %#v", refs[2])
+	}
+}
+
+func TestLargeHTMLSplitsByHeadings(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("<html><body>")
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(&sb, "<h1>Part %d</h1>", i)
+		for j := 0; j < 200; j++ {
+			sb.WriteString("<p>paragraph text</p>")
+		}
+	}
+	sb.WriteString("</body></html>")
+	p := filepath.Join(t.TempDir(), "large.html")
+	if err := os.WriteFile(p, []byte(sb.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Chapters) < 2 {
+		t.Fatalf("large HTML was not split into chapters: %d", len(b.Chapters))
+	}
+	if len(b.TOC) < 2 {
+		t.Fatalf("TOC = %#v", b.TOC)
+	}
+	if b.Chapters[0].Blocks != nil {
+		t.Fatal("large HTML should load chapters lazily")
+	}
+	for i := range b.Chapters {
+		if len(b.EnsureChapter(i).Blocks) == 0 {
+			t.Fatalf("chapter %d has no blocks", i)
+		}
+	}
+}
+
+func TestLargeHTMLWithoutHeadingsIsChunked(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("<html><body>")
+	for i := 0; i < 600; i++ {
+		sb.WriteString("<p>paragraph text</p>")
+	}
+	sb.WriteString("</body></html>")
+	p := filepath.Join(t.TempDir(), "flat.html")
+	if err := os.WriteFile(p, []byte(sb.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Chapters) < 2 {
+		t.Fatalf("large flat HTML was not chunked: %d", len(b.Chapters))
+	}
+	if len(b.TOC) < 2 {
+		t.Fatalf("TOC = %#v", b.TOC)
+	}
+	if b.Chapters[0].Blocks != nil {
+		t.Fatal("chunked HTML should be lazy")
+	}
+	if len(b.EnsureChapter(0).Blocks) == 0 {
+		t.Fatal("first chunk has no blocks")
 	}
 }
 

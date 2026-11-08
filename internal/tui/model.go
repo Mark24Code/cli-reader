@@ -341,7 +341,10 @@ func (m *Model) renderAt(percent float64, fragment string, atBottom, atTop bool)
 	if m.chapter < 0 || m.chapter >= len(m.book.Chapters) {
 		return
 	}
-	ch := &m.book.Chapters[m.chapter]
+	ch := m.book.EnsureChapter(m.chapter)
+	if ch == nil {
+		return
+	}
 	opts := render.Options{}
 	if m.book.PageMode || ch.PageMode {
 		opts.FullPage = true

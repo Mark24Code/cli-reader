@@ -15,7 +15,7 @@ import (
 
 const (
 	DefaultMaxImageBytes = 32 << 20
-	DefaultMaxImageCache = 64 << 20
+	DefaultMaxImageCache = 32 << 20
 	DefaultMaxFileBytes  = 16 << 20
 )
 

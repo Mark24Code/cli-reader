@@ -365,7 +365,7 @@ func (r *Renderer) loadImage(path string) (image.Image, error) {
 	b := img.Bounds()
 	pixels := int64(b.Dx()) * int64(b.Dy())
 	r.mu.Lock()
-	if len(r.cache) >= 16 || r.cachePixels+pixels > 80_000_000 {
+	if len(r.cache) >= 8 || r.cachePixels+pixels > 12_000_000 {
 		r.cache = make(map[string]image.Image)
 		r.cachePixels = 0
 	}

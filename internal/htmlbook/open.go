@@ -38,11 +38,15 @@ func Open(name string) (*book.Book, error) {
 		}
 	}
 
-	res, err := htmlimport.Parse(data, htmlimport.Options{
-		Href:                   filepath.Base(name),
-		GenerateHeadingAnchors: true,
-		ResolveImage:           book.ResolveLocalImage,
-	})
+	href := filepath.Base(name)
+	parse := func() (htmlimport.Result, error) {
+		return htmlimport.Parse(data, htmlimport.Options{
+			Href:                   href,
+			GenerateHeadingAnchors: true,
+			ResolveImage:           book.ResolveLocalImage,
+		})
+	}
+	res, err := parse()
 	if err != nil {
 		return nil, fmt.Errorf("解析 HTML 失败: %w", err)
 	}
@@ -63,6 +67,34 @@ func Open(name string) (*book.Book, error) {
 		title = strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
 	}
 
+	chapters := []book.Chapter{*res.Chapter}
+	toc := book.TOCEntriesFromHeadings(0, res.Headings)
+	splitLevel := 0
+	chunked := false
+	if len(data) > 2<<20 || len(res.Chapter.Blocks) > 400 {
+		if level := book.ChooseHeadingLevel(res.Headings); level > 0 {
+			if split, splitTOC := book.SplitByHeadings(res.Chapter, res.Headings, level, href); len(split) > 1 {
+				chapters = split
+				toc = splitTOC
+				splitLevel = level
+			}
+		}
+		if splitLevel == 0 {
+			if chunks := book.ChunkChapter(res.Chapter, 250, href); len(chunks) > 1 {
+				chapters = chunks
+				toc = nil
+				chunked = true
+			}
+		}
+	}
+	lazy := splitLevel > 0 || chunked
+	if lazy {
+		for i := range chapters {
+			chapters[i].Blocks = nil
+			chapters[i].Anchors = nil
+		}
+	}
+
 	b := &book.Book{
 		Path:     name,
 		Title:    title,
@@ -70,12 +102,35 @@ func Open(name string) (*book.Book, error) {
 		Language: res.Lang,
 		Format:   book.FormatHTML,
 		Unit:     "节",
-		Chapters: []book.Chapter{*res.Chapter},
+		Chapters: chapters,
 	}
 	b.Warnings = append(b.Warnings, warnings...)
 	b.SetImageProvider(book.NewDirImages(filepath.Dir(name)))
-	b.TOC = book.TOCEntriesFromHeadings(0, res.Headings)
+	b.TOC = toc
 	b.EnsureTOC()
+	if lazy {
+		b.SetChapterLoader(func(i int) error {
+			r, err := parse()
+			if err != nil {
+				return err
+			}
+			var part *book.Chapter
+			if splitLevel > 0 {
+				part = book.SplitPartByHeadings(r.Chapter, r.Headings, splitLevel, i, href)
+			} else {
+				part = book.ChunkChapterPart(r.Chapter, 250, i, href)
+			}
+			if part == nil {
+				return fmt.Errorf("章节索引无效")
+			}
+			target := &b.Chapters[i]
+			target.Blocks = part.Blocks
+			target.Anchors = part.Anchors
+			target.Heading = part.Heading
+			target.DocTitle = part.DocTitle
+			return nil
+		})
+	}
 	return b, nil
 }
 

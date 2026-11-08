@@ -15,7 +15,7 @@ import (
 const (
 	maxChapterBytes = 16 << 20
 	maxImageBytes   = 32 << 20
-	maxImageCache   = 64 << 20
+	maxImageCache   = 32 << 20
 )
 
 var errNotFound = errors.New("file not found in epub")

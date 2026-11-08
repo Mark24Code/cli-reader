@@ -1,6 +1,7 @@
 package txtbook
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,43 @@ func TestNoHeadingFallback(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(b.Warnings, " "), "没有识别到章节标题") {
 		t.Fatalf("warnings = %#v", b.Warnings)
+	}
+}
+
+func TestLargeTXTLoadsChaptersLazily(t *testing.T) {
+	var sb strings.Builder
+	for i := 1; i <= 6; i++ {
+		fmt.Fprintf(&sb, "第%d章 章节\n\n", i)
+		for j := 0; j < 4000; j++ {
+			sb.WriteString("这是一段较长的正文内容，用于测试按需加载章节的内存行为。\n")
+		}
+		sb.WriteString("\n")
+	}
+	b, err := Open(writeTXT(t, sb.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Chapters) != 6 {
+		t.Fatalf("chapters = %d", len(b.Chapters))
+	}
+	for i, ch := range b.Chapters {
+		if ch.Blocks != nil {
+			t.Fatalf("chapter %d parsed eagerly", i)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		if ch := b.EnsureChapter(i); ch == nil || len(ch.Blocks) == 0 {
+			t.Fatalf("chapter %d failed to load", i)
+		}
+	}
+	loaded := 0
+	for _, ch := range b.Chapters {
+		if ch.Blocks != nil {
+			loaded++
+		}
+	}
+	if loaded > book.LoadedChapterLimit {
+		t.Fatalf("loaded chapters = %d, limit = %d", loaded, book.LoadedChapterLimit)
 	}
 }
 

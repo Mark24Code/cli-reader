@@ -16,6 +16,7 @@ require (
 	github.com/pdfcpu/pdfcpu v0.11.1
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/yuin/goldmark v1.7.16
+	golang.org/x/exp v0.0.0-20261106192419-47ce03d25ef0
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
 	golang.org/x/term v0.47.0

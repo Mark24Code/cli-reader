@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -75,7 +76,17 @@ func run(args []string) int {
 		return 2
 	}
 
-	bk, err := formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: pdfMode})
+	openBook := func(mode string) (*book.Book, error) {
+		b, openErr := formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: mode})
+		if openErr == nil {
+			// Parsing PDFs (pdfcpu) and large images leaves unused heap behind;
+			// return it to the OS before entering the reading loop.
+			debug.FreeOSMemory()
+		}
+		return b, openErr
+	}
+
+	bk, err := openBook(pdfMode)
 	if err != nil {
 		switch {
 		case book.IsDRM(err):
@@ -121,7 +132,7 @@ func run(args []string) int {
 			if protocol == imgterm.ProtocolNone {
 				fmt.Fprintln(os.Stderr, "提示: 当前终端不支持原生图片协议，PDF 图片模式不可用，已切换到文本模式")
 				_ = bk.Close()
-				bk, err = formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: "text"})
+				bk, err = openBook("text")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "无法打开书籍: %v\n", err)
 					return 1
@@ -147,7 +158,7 @@ func run(args []string) int {
 			}
 			if action == pdfview.ActionText {
 				_ = bk.Close()
-				bk, err = formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: "text"})
+				bk, err = openBook("text")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "无法打开书籍: %v\n", err)
 					return 1
@@ -174,7 +185,7 @@ func run(args []string) int {
 		}
 		if wantsImage && bk.Format == book.FormatPDF {
 			_ = bk.Close()
-			bk, err = formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: "image"})
+			bk, err = openBook("image")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "无法打开书籍: %v\n", err)
 				return 1
