@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/theme"
+	"cli-reader/internal/book"
+	"cli-reader/internal/theme"
 )
 
 const tableMargin = "  "
@@ -15,7 +15,7 @@ const tableMargin = "  "
 type tablePlacement struct {
 	row, col         int
 	rowSpan, colSpan int
-	cell             epub.TableCell
+	cell             book.TableCell
 }
 
 // renderedCell is the laid-out content of a single table cell.
@@ -31,7 +31,7 @@ type renderedCell struct {
 // keep rows aligned. Colspan/rowspan are merged across the grid. When the
 // terminal is too narrow for even the minimum grid, the table falls back to a
 // stacked key/value layout instead of overflowing.
-func (r *Renderer) renderTable(b *epub.Block, width int) renderedBlock {
+func (r *Renderer) renderTable(b *book.Block, width int) renderedBlock {
 	if b == nil || len(b.Table) == 0 {
 		return renderedBlock{}
 	}
@@ -237,7 +237,7 @@ func tableJunction(left, right bool) string {
 	}
 }
 
-func buildTablePlacements(rows [][]epub.TableCell) ([]tablePlacement, int) {
+func buildTablePlacements(rows [][]book.TableCell) ([]tablePlacement, int) {
 	occupied := make(map[[2]int]bool)
 	var out []tablePlacement
 	ncols := 0
@@ -395,7 +395,7 @@ func distributeColumnWidths(natural []int, available int) []int {
 }
 
 // spansDisplayWidth is the widest hard-break-delimited line of a span run.
-func spansDisplayWidth(spans []epub.Span) int {
+func spansDisplayWidth(spans []book.Span) int {
 	best, current := 0, 0
 	for _, sp := range spans {
 		if sp.Break {
@@ -472,10 +472,10 @@ func padAligned(s string, width int, align string) string {
 // renderTableStacked is the narrow-terminal fallback. With a header row it
 // prints readable "header: value" pairs; otherwise each row becomes a wrapped
 // line with its cells separated by bars.
-func (r *Renderer) renderTableStacked(b *epub.Block, width int) renderedBlock {
+func (r *Renderer) renderTableStacked(b *book.Block, width int) renderedBlock {
 	var lines []string
 	var links [][]lineLink
-	add := func(spans []epub.Span, first, cont string, base Style) {
+	add := func(spans []book.Span, first, cont string, base Style) {
 		ls, ll := wrapStyledLinesWithLinks(spans, width, base, first, cont)
 		for i, line := range ls {
 			lines = append(lines, line)
@@ -486,7 +486,7 @@ func (r *Renderer) renderTableStacked(b *epub.Block, width int) renderedBlock {
 			}
 		}
 	}
-	addSpans := func(spans []epub.Span, first, cont string) {
+	addSpans := func(spans []book.Span, first, cont string) {
 		add(spans, first, cont, Style{})
 	}
 
@@ -509,10 +509,10 @@ func (r *Renderer) renderTableStacked(b *epub.Block, width int) renderedBlock {
 			}
 			continue
 		}
-		var spans []epub.Span
+		var spans []book.Span
 		for i, cell := range cells {
 			if i > 0 {
-				spans = append(spans, epub.Span{Text: " │ "})
+				spans = append(spans, book.Span{Text: " │ "})
 			}
 			spans = append(spans, cell.Spans...)
 		}
@@ -529,10 +529,10 @@ func (r *Renderer) renderTableStacked(b *epub.Block, width int) renderedBlock {
 			}
 		}
 		if !rendered {
-			var spans []epub.Span
+			var spans []book.Span
 			for i, cell := range b.Table[0] {
 				if i > 0 {
-					spans = append(spans, epub.Span{Text: " │ "})
+					spans = append(spans, book.Span{Text: " │ "})
 				}
 				spans = append(spans, cell.Spans...)
 			}
@@ -547,7 +547,7 @@ func (r *Renderer) renderTableStacked(b *epub.Block, width int) renderedBlock {
 	return renderedBlock{Lines: lines, Links: links}
 }
 
-func tableHeaders(rows [][]epub.TableCell) []string {
+func tableHeaders(rows [][]book.TableCell) []string {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -566,7 +566,7 @@ func tableHeaders(rows [][]epub.TableCell) []string {
 	return headers
 }
 
-func spansPlainText(spans []epub.Span) string {
+func spansPlainText(spans []book.Span) string {
 	var sb strings.Builder
 	for _, sp := range spans {
 		if sp.Break {

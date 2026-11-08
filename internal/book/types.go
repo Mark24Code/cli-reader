@@ -1,9 +1,46 @@
-package epub
+// Package book defines the format-neutral reading model shared by every
+// supported ebook format and the terminal renderer.
+package book
 
-import (
-	"archive/zip"
-	"sync"
+// Format identifies the container format a Book was loaded from.
+type Format string
+
+const (
+	FormatEPUB     Format = "epub"
+	FormatPDF      Format = "pdf"
+	FormatTXT      Format = "txt"
+	FormatMarkdown Format = "markdown"
+	FormatHTML     Format = "html"
+	FormatCBZ      Format = "cbz"
+	FormatMOBI     Format = "mobi" // MOBI and AZW3
 )
+
+// Reading modes for formats that support more than one presentation.
+const (
+	ModeText  = "text"
+	ModeImage = "image"
+)
+
+// Label returns a human-readable format name.
+func (f Format) Label() string {
+	switch f {
+	case FormatEPUB:
+		return "EPUB"
+	case FormatPDF:
+		return "PDF"
+	case FormatTXT:
+		return "TXT"
+	case FormatMarkdown:
+		return "Markdown"
+	case FormatHTML:
+		return "HTML"
+	case FormatCBZ:
+		return "CBZ"
+	case FormatMOBI:
+		return "MOBI/AZW3"
+	}
+	return string(f)
+}
 
 // BlockKind identifies the kind of a block of reading content.
 type BlockKind int
@@ -29,9 +66,9 @@ type Span struct {
 	Link      string
 }
 
-// ImageRef points at an image inside the EPUB archive.
+// ImageRef points at an image inside the book container.
 type ImageRef struct {
-	Path     string // normalised path inside the zip; empty if unavailable
+	Path     string // provider-specific key; empty if unavailable
 	Source   string // original src/href
 	Alt      string
 	Title    string
@@ -47,7 +84,7 @@ type TableCell struct {
 	Align   string // "left", "center" or "right"; empty means default
 }
 
-// Block is the intermediate representation between XHTML and the renderer.
+// Block is the intermediate representation between markup and the renderer.
 type Block struct {
 	Kind         BlockKind
 	Spans        []Span
@@ -63,14 +100,15 @@ type Block struct {
 	TableCaption []Span
 }
 
-// Chapter is one spine document, already parsed into blocks.
+// Chapter is one reading unit (a spine document, text section or page).
 type Chapter struct {
 	Index    int
 	ID       string
-	Href     string // normalised path inside the zip
+	Href     string // stable logical path or pseudo-href
 	Title    string
 	Heading  string // first heading, used as a title fallback
-	DocTitle string // <title> from the XHTML head
+	DocTitle string // document <title>
+	PageMode bool   // render a single page image filling the viewport
 	Blocks   []Block
 	Anchors  map[string]int // fragment -> block index
 }
@@ -80,29 +118,16 @@ type TOCEntry struct {
 	Title    string
 	Href     string
 	Fragment string
-	Chapter  int // -1 when the target is outside the reading spine
+	Chapter  int // -1 when the target is outside the reading content
 	Depth    int
 }
 
-// Book is a parsed EPUB.
-type Book struct {
-	Path       string
-	Title      string
-	Author     string
-	Language   string
-	Identifier string
-	Chapters   []Chapter
-	TOC        []TOCEntry
-	Warnings   []string
-
-	zip     *zip.Reader
-	closer  func() error
-	byName  map[string]*zip.File
-	byLower map[string]*zip.File
-
-	imageMu    sync.Mutex
-	imageCache map[string][]byte
-	imageBytes int64
+// HeadingRef records a heading that can become a TOC entry.
+type HeadingRef struct {
+	Block  int
+	Level  int
+	Title  string
+	Anchor string
 }
 
 // Position identifies a reading location. Percent is the chapter-local scroll

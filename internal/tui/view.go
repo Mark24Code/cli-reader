@@ -7,7 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"cli-epub-reader/internal/theme"
+	"cli-reader/internal/book"
+	"cli-reader/internal/theme"
 )
 
 var (
@@ -83,7 +84,7 @@ func (m Model) headerLine() string {
 	filled, empty := progressParts(pct, 8)
 	bar := styleAccent.Render(filled) + styleDim.Render(empty)
 	right := bar + " " + styleMuted.Render(fmt.Sprintf("%.0f%% · %d/%d", pct*100, chapter, total))
-	left := styleAccentBold.Render("✻ cli-epub-reader") + " " + styleMuted.Render("·") + " " + styleText.Render("《"+m.book.Title+"》")
+	left := styleAccentBold.Render("✻ cli-reader") + " " + styleMuted.Render("·") + " " + styleText.Render("《"+m.book.Title+"》")
 	return joinSides(left, right, m.width)
 }
 
@@ -133,6 +134,9 @@ func (m Model) hintLine() string {
 			hint = "↑↓ 滚动  ·  ←→ 章节  ·  t 目录  ·  f 收藏  ·  F 收藏列表  ·  b 返回  ·  / 对话  ·  ? 帮助"
 		}
 	}
+	if m.book != nil && m.book.Format == book.FormatPDF {
+		hint += "  ·  Tab 文本/图片"
+	}
 	return truncLine("  "+styleDim.Render(hint), m.width)
 }
 
@@ -166,7 +170,7 @@ func progressParts(p float64, width int) (string, string) {
 
 func (m Model) viewTooSmall() string {
 	lines := []string{
-		styleAccentBold.Render("✻ cli-epub-reader"),
+		styleAccentBold.Render("✻ cli-reader"),
 		"",
 		"终端窗口过小，请拉宽后再继续阅读",
 		fmt.Sprintf("当前 %d 列 × %d 行 · 至少 %d 列 × %d 行", m.width, m.height, MinWidth, MinHeight),

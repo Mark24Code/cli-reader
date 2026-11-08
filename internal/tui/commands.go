@@ -28,6 +28,8 @@ const (
 	ActionFavorites
 	ActionBack
 	ActionOpenImage
+	ActionPDFTextMode
+	ActionPDFImageMode
 	ActionStatus
 	ActionQuit
 )
@@ -67,6 +69,14 @@ func ParseCommand(raw string) Action {
 	if containsAny(lower, "关于", "作者", "程序信息", "版本信息", "about", "author", "credits") ||
 		lower == "a" {
 		action.Kind = ActionAbout
+		return action
+	}
+	if containsAny(lower, "图片模式", "图像模式", "image mode", "pdf image", "pdf 图片") {
+		action.Kind = ActionPDFImageMode
+		return action
+	}
+	if containsAny(lower, "文本模式", "文字模式", "text mode", "pdf text", "pdf 文本") {
+		action.Kind = ActionPDFTextMode
 		return action
 	}
 	if containsAny(lower, "收藏列表", "我的收藏", "所有收藏", "favorites", "favourites", "bookmarks", "favs") {

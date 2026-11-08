@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/theme"
+	"cli-reader/internal/book"
+	"cli-reader/internal/theme"
 )
 
 // ImageProvider supplies embedded image bytes.
@@ -23,7 +23,7 @@ type ImageSpan struct {
 	Index     int
 	StartLine int
 	EndLine   int // exclusive
-	Ref       epub.ImageRef
+	Ref       book.ImageRef
 	PixelW    int
 	PixelH    int
 }
@@ -53,6 +53,9 @@ type RenderedChapter struct {
 type Options struct {
 	MaxImageCols int
 	MaxImageRows int
+	// FullPage renders a page image without the decorative header and chapter
+	// title. It is used by comic pages and scanned PDF pages.
+	FullPage bool
 }
 
 // Renderer owns width-independent image caches.
@@ -84,7 +87,7 @@ func singleBlock(lines []string) renderedBlock {
 	return renderedBlock{Lines: lines}
 }
 
-func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *RenderedChapter {
+func (r *Renderer) RenderChapter(ch *book.Chapter, width int, opts Options) *RenderedChapter {
 	if width < 20 {
 		width = 20
 	}
@@ -102,28 +105,30 @@ func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *Ren
 	}
 
 	margin := "  "
-	rc.Lines = append(rc.Lines, margin+Style{FG: theme.Accent, Bold: true}.Render("✻ Claude")+
-		Style{FG: theme.Muted}.Render("  ·  正在阅读"))
-	rc.Lines = append(rc.Lines, "")
-	if ch.Heading == "" && ch.Title != "" {
-		titleSpans := []epub.Span{{Text: ch.Title, Bold: true}}
-		titleLines := wrapStyledLines(titleSpans, width, Style{FG: theme.Accent, Bold: true}, margin, margin)
-		rc.Lines = append(rc.Lines, titleLines...)
+	if !opts.FullPage {
+		rc.Lines = append(rc.Lines, margin+Style{FG: theme.Accent, Bold: true}.Render("✻ Claude")+
+			Style{FG: theme.Muted}.Render("  ·  正在阅读"))
 		rc.Lines = append(rc.Lines, "")
+		if ch.Heading == "" && ch.Title != "" {
+			titleSpans := []book.Span{{Text: ch.Title, Bold: true}}
+			titleLines := wrapStyledLines(titleSpans, width, Style{FG: theme.Accent, Bold: true}, margin, margin)
+			rc.Lines = append(rc.Lines, titleLines...)
+			rc.Lines = append(rc.Lines, "")
+		}
 	}
 
 	imageCount := 0
 	for i := range ch.Blocks {
-		if ch.Blocks[i].Kind == epub.BlockImage {
+		if ch.Blocks[i].Kind == book.BlockImage {
 			imageCount++
 		}
 	}
 	imageIndex := 0
-	prevKind := epub.BlockParagraph
+	prevKind := book.BlockParagraph
 	haveBlock := false
 	for i := range ch.Blocks {
 		block := &ch.Blocks[i]
-		consecutiveList := haveBlock && prevKind == epub.BlockListItem && block.Kind == epub.BlockListItem
+		consecutiveList := haveBlock && prevKind == book.BlockListItem && block.Kind == book.BlockListItem
 		if !consecutiveList {
 			addBlankLine(&rc.Lines)
 		}
@@ -132,20 +137,20 @@ func (r *Renderer) RenderChapter(ch *epub.Chapter, width int, opts Options) *Ren
 		haveBlock = true
 		var rendered renderedBlock
 		switch block.Kind {
-		case epub.BlockHeading:
+		case book.BlockHeading:
 			rendered = r.renderHeading(block, width)
-		case epub.BlockParagraph:
+		case book.BlockParagraph:
 			rendered = r.renderParagraph(block, width)
-		case epub.BlockListItem:
+		case book.BlockListItem:
 			rendered = r.renderListItem(block, width)
-		case epub.BlockCode:
+		case book.BlockCode:
 			rendered = singleBlock(renderCodeBlock(block.Code, block.Lang, width))
-		case epub.BlockImage:
+		case book.BlockImage:
 			imageIndex++
 			rendered = singleBlock(r.renderImage(block, width, opts, imageIndex, imageCount, len(rc.Lines), &rc.Images))
-		case epub.BlockRule:
+		case book.BlockRule:
 			rendered = singleBlock(renderRule(width))
-		case epub.BlockTable:
+		case book.BlockTable:
 			rendered = r.renderTable(block, width)
 		}
 		lineBase := len(rc.Lines)
@@ -203,7 +208,7 @@ func addBlankLine(lines *[]string) {
 	*lines = append(*lines, "")
 }
 
-func (r *Renderer) renderHeading(b *epub.Block, width int) renderedBlock {
+func (r *Renderer) renderHeading(b *book.Block, width int) renderedBlock {
 	base := Style{FG: theme.Accent, Bold: true}
 	if b.Level > 3 {
 		base = Style{Bold: true}
@@ -212,7 +217,7 @@ func (r *Renderer) renderHeading(b *epub.Block, width int) renderedBlock {
 	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderParagraph(b *epub.Block, width int) renderedBlock {
+func (r *Renderer) renderParagraph(b *book.Block, width int) renderedBlock {
 	if b.Quote {
 		base := Style{Italic: true}
 		prefix := "  " + Style{FG: theme.Muted}.Render("│ ")
@@ -223,7 +228,7 @@ func (r *Renderer) renderParagraph(b *epub.Block, width int) renderedBlock {
 	return renderedBlock{Lines: lines, Links: links}
 }
 
-func (r *Renderer) renderListItem(b *epub.Block, width int) renderedBlock {
+func (r *Renderer) renderListItem(b *book.Block, width int) renderedBlock {
 	depth := b.Depth
 	if depth < 1 {
 		depth = 1
@@ -259,15 +264,23 @@ func renderRule(width int) []string {
 	return []string{"  " + Style{FG: theme.Dim}.Render(strings.Repeat("─", n))}
 }
 
-func (r *Renderer) renderImage(b *epub.Block, width int, opts Options, index, total, lineStart int, spans *[]ImageSpan) []string {
-	ref := epub.ImageRef{}
+func (r *Renderer) renderImage(b *book.Block, width int, opts Options, index, total, lineStart int, spans *[]ImageSpan) []string {
+	ref := book.ImageRef{}
 	if b.Image != nil {
 		ref = *b.Image
 	}
-	maxCols := opts.MaxImageCols
+	indent := "  "
 	limit := width - 6
+	if opts.FullPage {
+		indent = " "
+		limit = width - 2
+	}
 	if limit < 8 {
 		limit = 8
+	}
+	maxCols := opts.MaxImageCols
+	if maxCols <= 0 && opts.FullPage {
+		maxCols = limit
 	}
 	if maxCols > limit {
 		maxCols = limit
@@ -293,30 +306,32 @@ func (r *Renderer) renderImage(b *epub.Block, width int, opts Options, index, to
 		if ref.External {
 			reason = "外部图片已忽略"
 		}
-		out = append(out, "  "+Style{FG: theme.Muted}.Render(label+" · "+reason))
+		out = append(out, indent+Style{FG: theme.Muted}.Render(label+" · "+reason))
 		if ref.Alt != "" {
-			out = append(out, wrapStyledLines([]epub.Span{{Text: ref.Alt, Italic: true}}, width, Style{FG: theme.Muted}, "  ", "  ")...)
+			out = append(out, wrapStyledLines([]book.Span{{Text: ref.Alt, Italic: true}}, width, Style{FG: theme.Muted}, indent, indent)...)
 		}
 		return out
 	}
 	if loadErr != nil {
-		out = append(out, "  "+Style{FG: theme.Muted}.Render(label+" · 无法预览"))
+		out = append(out, indent+Style{FG: theme.Muted}.Render(label+" · 无法预览"))
 	} else {
-		meta := fmt.Sprintf(" %d×%d · Enter 查看原图", imgW, imgH)
-		line := "  " + Style{FG: theme.Accent}.Render(label) + Style{FG: theme.Muted}.Render(meta)
-		out = append(out, truncateVisible(line, width))
+		if !opts.FullPage {
+			meta := fmt.Sprintf(" %d×%d · Enter 查看原图", imgW, imgH)
+			line := indent + Style{FG: theme.Accent}.Render(label) + Style{FG: theme.Muted}.Render(meta)
+			out = append(out, truncateVisible(line, width))
+		}
 		if maxCols > 0 {
 			key := fmt.Sprintf("%s|%d|%d", ref.Path, maxCols, opts.MaxImageRows)
 			thumb, err := r.thumbnail(ref.Path, img, maxCols, opts.MaxImageRows, key)
 			if err == nil {
 				for _, line := range thumb.lines {
-					out = append(out, "  "+line)
+					out = append(out, indent+line)
 				}
 			}
 		}
 	}
-	if ref.Alt != "" {
-		out = append(out, wrapStyledLines([]epub.Span{{Text: ref.Alt, Italic: true}}, width, Style{FG: theme.Muted}, "  ", "  ")...)
+	if ref.Alt != "" && !opts.FullPage {
+		out = append(out, wrapStyledLines([]book.Span{{Text: ref.Alt, Italic: true}}, width, Style{FG: theme.Muted}, indent, indent)...)
 	}
 	*spans = append(*spans, ImageSpan{
 		Index:     index,

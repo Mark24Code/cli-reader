@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"cli-reader/internal/book"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -98,6 +100,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.nextChapter(false)
 	case "p":
 		m.prevChapter(false)
+	case "m":
+		return m, m.togglePDFMode()
+	case "tab":
+		if m.book != nil && m.book.Format == book.FormatPDF {
+			return m, m.requestPDFImage()
+		}
 	case "t", "ctrl+t":
 		m.openModal(modalTOC)
 	case "f":
@@ -295,7 +303,7 @@ func (m *Model) jumpToFavorite(index int) {
 	idx := m.book.ChapterByHref(f.Href)
 	m.modal = modalState{}
 	if idx < 0 {
-		m.setNotice("收藏对应的章节已不存在", true)
+		m.setNotice("收藏对应的阅读单元已不存在", true)
 		return
 	}
 	percent := 0.0

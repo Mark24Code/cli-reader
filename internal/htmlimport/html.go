@@ -1,13 +1,19 @@
-package epub
+// Package htmlimport converts XHTML/HTML documents into the shared reading
+// model. EPUB, HTML, Markdown and MOBI all feed their content through Parse.
+package htmlimport
 
 import (
 	"bytes"
-	"path"
+	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
+
+	"cli-reader/internal/book"
 )
 
 type inlineStyle struct {
@@ -19,47 +25,101 @@ type flowCtx struct {
 	quote bool
 }
 
-type chapterParser struct {
-	b       *Book
-	ch      *Chapter
-	pending []string
+// Options controls document parsing.
+type Options struct {
+	Href                   string
+	Index                  int
+	GenerateHeadingAnchors bool
+	// ResolveImage fills Path/External on an image reference. The parser has
+	// already rejected empty, data: and absolute http(s) sources.
+	ResolveImage func(ref *book.ImageRef)
 }
 
-func (b *Book) parseChapter(data []byte, index int, href string) (*Chapter, error) {
-	reader, err := charset.NewReader(bytes.NewReader(data), "application/xhtml+xml")
-	if err != nil {
-		reader = bytes.NewReader(data)
+// Result is one parsed document.
+type Result struct {
+	Chapter  *book.Chapter
+	Headings []book.HeadingRef
+	DocTitle string
+	Lang     string
+	Author   string
+}
+
+type chapterParser struct {
+	opts       Options
+	ch         *book.Chapter
+	pending    []string
+	headings   []book.HeadingRef
+	headingSeq int
+}
+
+// Parse converts an HTML/XHTML document into a Chapter and its headings.
+func Parse(data []byte, opts Options) (Result, error) {
+	var reader io.Reader = bytes.NewReader(data)
+	if !utf8.Valid(data) {
+		if decoded, err := charset.NewReader(bytes.NewReader(data), "application/xhtml+xml"); err == nil {
+			reader = decoded
+		}
 	}
 	doc, err := html.Parse(reader)
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
-	ch := &Chapter{
-		Index:   index,
-		Href:    href,
+	ch := &book.Chapter{
+		Index:   opts.Index,
+		Href:    opts.Href,
 		Anchors: make(map[string]int),
 	}
 	if title := findElement(doc, "title"); title != nil {
-		ch.DocTitle = CollapseSpace(textContent(title))
+		ch.DocTitle = book.CollapseSpace(textContent(title))
 	}
+	lang := ""
+	if root := findElement(doc, "html"); root != nil {
+		lang = strings.TrimSpace(Attr(root, "lang"))
+	}
+	author := book.CollapseSpace(metaContent(doc, "author"))
 	root := findElement(doc, "body")
 	if root == nil {
 		root = doc
 	}
-	p := &chapterParser{b: b, ch: ch}
+	p := &chapterParser{opts: opts, ch: ch}
 	p.parseFlow(root, flowCtx{})
-	return ch, nil
+	return Result{
+		Chapter:  ch,
+		Headings: p.headings,
+		DocTitle: ch.DocTitle,
+		Lang:     lang,
+		Author:   author,
+	}, nil
+}
+
+func metaContent(doc *html.Node, name string) string {
+	var out string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if out != "" {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "meta" &&
+			strings.EqualFold(strings.TrimSpace(Attr(n, "name")), name) {
+			out = Attr(n, "content")
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return out
 }
 
 func (p *chapterParser) parseFlow(n *html.Node, ctx flowCtx) {
-	var spans []Span
+	var spans []book.Span
 	var anchors []string
 	base := inlineStyle{}
 	applyNodeStyle(n, &base)
 	flush := func() {
 		spans = normalizeSpans(spans)
 		if hasVisibleText(spans) {
-			p.addBlock(Block{Kind: BlockParagraph, Spans: spans, Quote: ctx.quote}, anchors)
+			p.addBlock(book.Block{Kind: book.BlockParagraph, Spans: spans, Quote: ctx.quote}, anchors)
 		} else if len(anchors) > 0 {
 			p.pending = append(p.pending, anchors...)
 		}
@@ -70,7 +130,7 @@ func (p *chapterParser) parseFlow(n *html.Node, ctx flowCtx) {
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		switch c.Type {
 		case html.TextNode:
-			if text := SanitizeText(c.Data); text != "" {
+			if text := book.SanitizeText(c.Data); text != "" {
 				spans = append(spans, styledSpan(base, text))
 			}
 		case html.ElementNode:
@@ -137,9 +197,22 @@ func (p *chapterParser) handleBlock(n *html.Node, ctx flowCtx) {
 			return
 		}
 		level := int(n.Data[1] - '0')
-		p.addBlock(Block{Kind: BlockHeading, Level: level, Spans: spans, Quote: ctx.quote}, anchors)
+		anchor := ""
+		switch {
+		case len(ownAnchors) > 0:
+			anchor = ownAnchors[0]
+		case len(anchors) > 0:
+			anchor = anchors[0]
+		case p.opts.GenerateHeadingAnchors:
+			anchor = p.nextHeadingAnchor()
+			anchors = append(anchors, anchor)
+		}
+		block := book.Block{Kind: book.BlockHeading, Level: level, Spans: spans, Quote: ctx.quote}
+		idx := p.addBlock(block, anchors)
+		title := book.CollapseSpace(spansText(spans))
+		p.headings = append(p.headings, book.HeadingRef{Block: idx, Level: level, Title: title, Anchor: anchor})
 		if p.ch.Heading == "" {
-			p.ch.Heading = CollapseSpace(spansText(spans))
+			p.ch.Heading = title
 		}
 	case "blockquote":
 		p.parseFlow(n, flowCtx{quote: true})
@@ -154,7 +227,7 @@ func (p *chapterParser) handleBlock(n *html.Node, ctx flowCtx) {
 	case "table":
 		p.parseTable(n, ctx)
 	case "hr":
-		p.addBlock(Block{Kind: BlockRule, Quote: ctx.quote}, nil)
+		p.addBlock(book.Block{Kind: book.BlockRule, Quote: ctx.quote}, nil)
 	case "img":
 		p.addImage(n, ctx.quote)
 	case "svg":
@@ -165,14 +238,24 @@ func (p *chapterParser) handleBlock(n *html.Node, ctx flowCtx) {
 	}
 }
 
-func (p *chapterParser) collectInlineChildren(n *html.Node, style inlineStyle) ([]Span, []string) {
+func (p *chapterParser) nextHeadingAnchor() string {
+	for {
+		p.headingSeq++
+		name := fmt.Sprintf("heading-%d", p.headingSeq)
+		if _, exists := p.ch.Anchors[name]; !exists {
+			return name
+		}
+	}
+}
+
+func (p *chapterParser) collectInlineChildren(n *html.Node, style inlineStyle) ([]book.Span, []string) {
 	applyNodeStyle(n, &style)
-	var spans []Span
+	var spans []book.Span
 	var anchors []string
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		switch c.Type {
 		case html.TextNode:
-			spans = append(spans, styledSpan(style, SanitizeText(c.Data)))
+			spans = append(spans, styledSpan(style, book.SanitizeText(c.Data)))
 		case html.ElementNode:
 			p.collectInline(c, style, &spans, &anchors)
 		}
@@ -180,14 +263,14 @@ func (p *chapterParser) collectInlineChildren(n *html.Node, style inlineStyle) (
 	return spans, anchors
 }
 
-func (p *chapterParser) collectInline(n *html.Node, style inlineStyle, spans *[]Span, anchors *[]string) {
+func (p *chapterParser) collectInline(n *html.Node, style inlineStyle, spans *[]book.Span, anchors *[]string) {
 	*anchors = append(*anchors, elementAnchorNames(n)...)
 	switch n.Data {
 	case "br":
-		*spans = append(*spans, Span{Break: true})
+		*spans = append(*spans, book.Span{Break: true})
 		return
 	case "img":
-		alt := CollapseSpace(attrValue(n, "alt"))
+		alt := book.CollapseSpace(attrValue(n, "alt"))
 		if alt == "" {
 			alt = "图片"
 		}
@@ -211,7 +294,7 @@ func (p *chapterParser) collectInline(n *html.Node, style inlineStyle, spans *[]
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		switch c.Type {
 		case html.TextNode:
-			*spans = appendStyled(*spans, styledSpan(style, SanitizeText(c.Data)))
+			*spans = appendStyled(*spans, styledSpan(style, book.SanitizeText(c.Data)))
 		case html.ElementNode:
 			p.collectInline(c, style, spans, anchors)
 		}
@@ -229,8 +312,8 @@ func (p *chapterParser) parseList(n *html.Node, ctx flowCtx, ordered bool, depth
 		spans, inlineAnchors := p.collectListItemInline(li)
 		spans = normalizeSpans(spans)
 		if hasVisibleText(spans) {
-			p.addBlock(Block{
-				Kind:    BlockListItem,
+			p.addBlock(book.Block{
+				Kind:    book.BlockListItem,
 				Spans:   spans,
 				Depth:   depth,
 				Ordered: ordered,
@@ -247,8 +330,8 @@ func (p *chapterParser) parseList(n *html.Node, ctx flowCtx, ordered bool, depth
 	}
 }
 
-func (p *chapterParser) collectListItemInline(li *html.Node) ([]Span, []string) {
-	var spans []Span
+func (p *chapterParser) collectListItemInline(li *html.Node) ([]book.Span, []string) {
+	var spans []book.Span
 	var anchors []string
 	base := inlineStyle{}
 	applyNodeStyle(li, &base)
@@ -257,15 +340,15 @@ func (p *chapterParser) collectListItemInline(li *html.Node) ([]Span, []string) 
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			switch c.Type {
 			case html.TextNode:
-				spans = append(spans, styledSpan(base, SanitizeText(c.Data)))
+				spans = append(spans, styledSpan(base, book.SanitizeText(c.Data)))
 			case html.ElementNode:
 				switch c.Data {
 				case "ul", "ol", "script", "style", "template":
 					continue
 				case "br":
-					spans = append(spans, Span{Break: true})
+					spans = append(spans, book.Span{Break: true})
 				case "img":
-					alt := CollapseSpace(attrValue(c, "alt"))
+					alt := book.CollapseSpace(attrValue(c, "alt"))
 					if alt == "" {
 						alt = "图片"
 					}
@@ -325,13 +408,13 @@ func (p *chapterParser) parsePre(n *html.Node) {
 	if len(source) > 512<<10 {
 		source = source[:512<<10] + "\n…（代码过长，已截断）"
 	}
-	p.addBlock(Block{Kind: BlockCode, Code: source, Lang: lang}, nil)
+	p.addBlock(book.Block{Kind: book.BlockCode, Code: source, Lang: lang}, nil)
 }
 
 func codeLanguage(n *html.Node) string {
 	lang := strings.TrimSpace(attrValue(n, "data-language"))
 	if lang != "" {
-		return strings.ToLower(CollapseSpace(lang))
+		return strings.ToLower(book.CollapseSpace(lang))
 	}
 	for _, class := range strings.Fields(attrValue(n, "class")) {
 		lower := strings.ToLower(class)
@@ -345,7 +428,7 @@ func codeLanguage(n *html.Node) string {
 }
 
 func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
-	var rows [][]TableCell
+	var rows [][]book.TableCell
 	var anchors []string
 	var walkRows func(*html.Node, bool)
 	walkRows = func(cur *html.Node, header bool) {
@@ -374,7 +457,7 @@ func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
 	}
 	walkRows(n, false)
 
-	var caption []Span
+	var caption []book.Span
 	if cn := firstChildElement(n, "caption"); cn != nil {
 		var captionAnchors []string
 		caption, captionAnchors = p.collectInlineChildren(cn, inlineStyle{})
@@ -392,15 +475,15 @@ func (p *chapterParser) parseTable(n *html.Node, ctx flowCtx) {
 		spans, cellAnchors := p.collectTableCellContent(n)
 		spans = normalizeSpans(spans)
 		if hasVisibleText(spans) {
-			p.addBlock(Block{Kind: BlockParagraph, Spans: spans, Quote: ctx.quote}, append(anchors, cellAnchors...))
+			p.addBlock(book.Block{Kind: book.BlockParagraph, Spans: spans, Quote: ctx.quote}, append(anchors, cellAnchors...))
 		}
 		return
 	}
-	p.addBlock(Block{Kind: BlockTable, Table: rows, TableCaption: caption, Quote: ctx.quote}, anchors)
+	p.addBlock(book.Block{Kind: book.BlockTable, Table: rows, TableCaption: caption, Quote: ctx.quote}, anchors)
 }
 
-func (p *chapterParser) parseTableRow(tr *html.Node, header bool, anchors *[]string) []TableCell {
-	var cells []TableCell
+func (p *chapterParser) parseTableRow(tr *html.Node, header bool, anchors *[]string) []book.TableCell {
+	var cells []book.TableCell
 	for td := tr.FirstChild; td != nil; td = td.NextSibling {
 		if td.Type != html.ElementNode || (td.Data != "td" && td.Data != "th") {
 			continue
@@ -408,7 +491,7 @@ func (p *chapterParser) parseTableRow(tr *html.Node, header bool, anchors *[]str
 		*anchors = append(*anchors, elementAnchorNames(td)...)
 		spans, cellAnchors := p.collectTableCellContent(td)
 		*anchors = append(*anchors, cellAnchors...)
-		cell := TableCell{
+		cell := book.TableCell{
 			Spans:   normalizeSpans(spans),
 			Header:  header || td.Data == "th",
 			ColSpan: tableSpanAttr(td, "colspan"),
@@ -423,8 +506,8 @@ func (p *chapterParser) parseTableRow(tr *html.Node, header bool, anchors *[]str
 // collectTableCellContent flattens the block structure of a cell into spans,
 // using hard line breaks between paragraphs, list items and <br> elements.
 // Inline styling, links and anchors from the original markup are preserved.
-func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []string) {
-	var spans []Span
+func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]book.Span, []string) {
+	var spans []book.Span
 	var anchors []string
 	base := inlineStyle{}
 	applyNodeStyle(cell, &base)
@@ -433,7 +516,7 @@ func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []stri
 	walk = func(n *html.Node, st inlineStyle) {
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			if c.Type == html.TextNode {
-				if text := SanitizeText(c.Data); text != "" {
+				if text := book.SanitizeText(c.Data); text != "" {
 					spans = append(spans, styledSpan(st, text))
 				}
 				continue
@@ -444,7 +527,7 @@ func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []stri
 			anchors = append(anchors, elementAnchorNames(c)...)
 			switch c.Data {
 			case "br":
-				spans = append(spans, Span{Break: true})
+				spans = append(spans, book.Span{Break: true})
 			case "ul", "ol":
 				p.collectTableCellList(c, st, 0, &spans, &anchors)
 			case "table":
@@ -454,14 +537,14 @@ func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []stri
 				if text == "" {
 					continue
 				}
-				spans = append(spans, Span{Break: true})
+				spans = append(spans, book.Span{Break: true})
 				for i, line := range strings.Split(text, "\n") {
 					if i > 0 {
-						spans = append(spans, Span{Break: true})
+						spans = append(spans, book.Span{Break: true})
 					}
-					spans = append(spans, Span{Text: line, Code: true, Italic: st.italic})
+					spans = append(spans, book.Span{Text: line, Code: true, Italic: st.italic})
 				}
-				spans = append(spans, Span{Break: true})
+				spans = append(spans, book.Span{Break: true})
 			case "p", "div", "section", "article", "main", "aside", "header",
 				"footer", "figure", "figcaption", "blockquote":
 				childStyle := st
@@ -469,9 +552,9 @@ func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []stri
 				if c.Data == "blockquote" {
 					childStyle.italic = true
 				}
-				spans = append(spans, Span{Break: true})
+				spans = append(spans, book.Span{Break: true})
 				walk(c, childStyle)
-				spans = append(spans, Span{Break: true})
+				spans = append(spans, book.Span{Break: true})
 			case "script", "style", "template", "head":
 				// Not reading content.
 			default:
@@ -483,7 +566,7 @@ func (p *chapterParser) collectTableCellContent(cell *html.Node) ([]Span, []stri
 	return spans, anchors
 }
 
-func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth int, spans *[]Span, anchors *[]string) {
+func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth int, spans *[]book.Span, anchors *[]string) {
 	ordered := n.Data == "ol"
 	number := 0
 	indent := strings.Repeat("  ", depth)
@@ -497,12 +580,12 @@ func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth
 		if ordered {
 			marker = strconv.Itoa(number) + ". "
 		}
-		*spans = append(*spans, Span{Break: true}, styledSpan(st, indent+marker))
+		*spans = append(*spans, book.Span{Break: true}, styledSpan(st, indent+marker))
 		var nested []*html.Node
 		for c := li.FirstChild; c != nil; c = c.NextSibling {
 			switch c.Type {
 			case html.TextNode:
-				if text := SanitizeText(c.Data); text != "" {
+				if text := book.SanitizeText(c.Data); text != "" {
 					*spans = append(*spans, styledSpan(st, text))
 				}
 			case html.ElementNode:
@@ -510,11 +593,11 @@ func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth
 				case "ul", "ol":
 					nested = append(nested, c)
 				case "br":
-					*spans = append(*spans, Span{Break: true})
+					*spans = append(*spans, book.Span{Break: true})
 				case "p", "div":
-					*spans = append(*spans, Span{Break: true})
+					*spans = append(*spans, book.Span{Break: true})
 					p.collectInline(c, st, spans, anchors)
-					*spans = append(*spans, Span{Break: true})
+					*spans = append(*spans, book.Span{Break: true})
 				case "script", "style", "template":
 				default:
 					p.collectInline(c, st, spans, anchors)
@@ -525,12 +608,12 @@ func (p *chapterParser) collectTableCellList(n *html.Node, st inlineStyle, depth
 			p.collectTableCellList(sub, st, depth+1, spans, anchors)
 		}
 	}
-	*spans = append(*spans, Span{Break: true})
+	*spans = append(*spans, book.Span{Break: true})
 }
 
 // collectNestedTableText turns a table nested inside a cell into readable
 // one-row-per-line text, since the terminal cell cannot host another grid.
-func (p *chapterParser) collectNestedTableText(table *html.Node, spans *[]Span) {
+func (p *chapterParser) collectNestedTableText(table *html.Node, spans *[]book.Span) {
 	var rows [][]string
 	var walkRows func(*html.Node)
 	walkRows = func(cur *html.Node) {
@@ -545,7 +628,7 @@ func (p *chapterParser) collectNestedTableText(table *html.Node, spans *[]Span) 
 					if td.Type != html.ElementNode || (td.Data != "td" && td.Data != "th") {
 						continue
 					}
-					if text := CollapseSpace(textContent(td)); text != "" {
+					if text := book.CollapseSpace(textContent(td)); text != "" {
 						cells = append(cells, text)
 					}
 				}
@@ -561,10 +644,10 @@ func (p *chapterParser) collectNestedTableText(table *html.Node, spans *[]Span) 
 	if len(rows) == 0 {
 		return
 	}
-	*spans = append(*spans, Span{Break: true})
+	*spans = append(*spans, book.Span{Break: true})
 	for _, row := range rows {
-		*spans = append(*spans, Span{Text: strings.Join(row, " │ ")})
-		*spans = append(*spans, Span{Break: true})
+		*spans = append(*spans, book.Span{Text: strings.Join(row, " │ ")})
+		*spans = append(*spans, book.Span{Break: true})
 	}
 }
 
@@ -612,10 +695,10 @@ func (p *chapterParser) addImage(n *html.Node, quote bool) {
 	if src == "" {
 		src = attrValue(n, "data-src")
 	}
-	alt := CollapseSpace(attrValue(n, "alt"))
-	title := CollapseSpace(attrValue(n, "title"))
+	alt := book.CollapseSpace(attrValue(n, "alt"))
+	title := book.CollapseSpace(attrValue(n, "title"))
 	ref := p.imageRef(src, alt, title)
-	p.addBlock(Block{Kind: BlockImage, Image: ref, Quote: quote}, nil)
+	p.addBlock(book.Block{Kind: book.BlockImage, Image: ref, Quote: quote}, nil)
 }
 
 func (p *chapterParser) parseSVG(n *html.Node, quote bool) {
@@ -633,7 +716,7 @@ func (p *chapterParser) parseSVG(n *html.Node, quote bool) {
 	find(n)
 	alt := "SVG 图片"
 	if t := findElement(n, "title"); t != nil {
-		if s := CollapseSpace(textContent(t)); s != "" {
+		if s := book.CollapseSpace(textContent(t)); s != "" {
 			alt = s
 		}
 	}
@@ -642,31 +725,26 @@ func (p *chapterParser) parseSVG(n *html.Node, quote bool) {
 		if src == "" {
 			src = attrValue(image, "xlink:href")
 		}
-		p.addBlock(Block{Kind: BlockImage, Image: p.imageRef(src, alt, ""), Quote: quote}, nil)
+		p.addBlock(book.Block{Kind: book.BlockImage, Image: p.imageRef(src, alt, ""), Quote: quote}, nil)
 		return
 	}
-	p.addBlock(Block{Kind: BlockImage, Image: &ImageRef{Alt: alt}, Quote: quote}, nil)
+	p.addBlock(book.Block{Kind: book.BlockImage, Image: &book.ImageRef{Alt: alt}, Quote: quote}, nil)
 }
 
-func (p *chapterParser) imageRef(src, alt, title string) *ImageRef {
-	ref := &ImageRef{Source: src, Alt: alt, Title: title}
+func (p *chapterParser) imageRef(src, alt, title string) *book.ImageRef {
+	ref := &book.ImageRef{Source: src, Alt: alt, Title: title}
 	if src == "" {
 		return ref
 	}
-	if strings.HasPrefix(strings.ToLower(src), "data:") ||
-		strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") ||
+	lower := strings.ToLower(src)
+	if strings.HasPrefix(lower, "data:") ||
+		strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") ||
 		strings.HasPrefix(src, "//") {
 		ref.External = true
 		return ref
 	}
-	zp, _, external, err := p.b.resolveHref(p.ch.Href, src)
-	if err != nil || external {
-		ref.External = external
-		return ref
-	}
-	ref.Path = zp
-	if ref.Alt == "" {
-		ref.Alt = strings.TrimSuffix(path.Base(zp), path.Ext(zp))
+	if p.opts.ResolveImage != nil {
+		p.opts.ResolveImage(ref)
 	}
 	return ref
 }

@@ -8,6 +8,9 @@ import (
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
+
+	"cli-reader/internal/book"
+	"cli-reader/internal/htmlimport"
 )
 
 type ncxDoc struct {
@@ -28,7 +31,7 @@ type ncxNavPoint struct {
 	Children []ncxNavPoint `xml:"navPoint"`
 }
 
-func (b *Book) parseNavTOC(data []byte, navPath string) ([]TOCEntry, error) {
+func (l *loader) parseNavTOC(data []byte, navPath string) ([]book.TOCEntry, error) {
 	reader, err := charset.NewReader(bytes.NewReader(data), "application/xhtml+xml")
 	if err != nil {
 		reader = bytes.NewReader(data)
@@ -55,7 +58,7 @@ func (b *Book) parseNavTOC(data []byte, navPath string) ([]TOCEntry, error) {
 
 	chosen := navs[0]
 	for _, nav := range navs {
-		t := strings.ToLower(attrValue(nav, "type") + " " + attrValue(nav, "epub:type"))
+		t := strings.ToLower(htmlimport.Attr(nav, "type") + " " + htmlimport.Attr(nav, "epub:type"))
 		if strings.Contains(t, "toc") {
 			chosen = nav
 			break
@@ -69,20 +72,20 @@ func (b *Book) parseNavTOC(data []byte, navPath string) ([]TOCEntry, error) {
 			}
 		}
 	}
-	list := firstChildElement(chosen, "ol", "ul")
+	list := htmlimport.FirstChildElement(chosen, "ol", "ul")
 	if list == nil {
 		return nil, fmt.Errorf("nav 中没有目录列表")
 	}
-	var entries []TOCEntry
-	b.walkNavList(list, navPath, 0, &entries)
+	var entries []book.TOCEntry
+	l.walkNavList(list, navPath, 0, &entries)
 	return entries, nil
 }
 
 func navHasList(n *html.Node) bool {
-	return firstChildElement(n, "ol", "ul") != nil
+	return htmlimport.FirstChildElement(n, "ol", "ul") != nil
 }
 
-func (b *Book) walkNavList(list *html.Node, navPath string, depth int, out *[]TOCEntry) {
+func (l *loader) walkNavList(list *html.Node, navPath string, depth int, out *[]book.TOCEntry) {
 	for li := list.FirstChild; li != nil; li = li.NextSibling {
 		if li.Type != html.ElementNode || li.Data != "li" {
 			continue
@@ -103,14 +106,14 @@ func (b *Book) walkNavList(list *html.Node, navPath string, depth int, out *[]TO
 			}
 		}
 		if anchor != nil {
-			title := CollapseSpace(textContent(anchor))
-			raw := attrValue(anchor, "href")
+			title := book.CollapseSpace(htmlimport.TextContent(anchor))
+			raw := htmlimport.Attr(anchor, "href")
 			if title == "" {
-				title = CollapseSpace(raw)
+				title = book.CollapseSpace(raw)
 			}
 			if raw != "" {
-				zp, frag, _, err := b.resolveHref(navPath, raw)
-				entry := TOCEntry{Title: title, Fragment: frag, Chapter: -1, Depth: depth}
+				zp, frag, _, err := l.resolveHref(navPath, raw)
+				entry := book.TOCEntry{Title: title, Fragment: frag, Chapter: -1, Depth: depth}
 				if err == nil {
 					entry.Href = zp
 				}
@@ -118,28 +121,28 @@ func (b *Book) walkNavList(list *html.Node, navPath string, depth int, out *[]TO
 			}
 		}
 		for _, n := range nested {
-			b.walkNavList(n, navPath, depth+1, out)
+			l.walkNavList(n, navPath, depth+1, out)
 		}
 	}
 }
 
-func (b *Book) parseNCXTOC(data []byte, ncxPath string) ([]TOCEntry, error) {
+func (l *loader) parseNCXTOC(data []byte, ncxPath string) ([]book.TOCEntry, error) {
 	var doc ncxDoc
 	if err := decodeXML(data, &doc); err != nil {
 		return nil, err
 	}
-	var out []TOCEntry
+	var out []book.TOCEntry
 	var walk func(points []ncxNavPoint, depth int)
 	walk = func(points []ncxNavPoint, depth int) {
 		for _, np := range points {
-			title := CollapseSpace(np.Label.Text)
-			raw := strings.TrimSpace(SanitizeText(np.Content.Src))
+			title := book.CollapseSpace(np.Label.Text)
+			raw := strings.TrimSpace(book.SanitizeText(np.Content.Src))
 			if raw != "" {
 				if title == "" {
 					title = strings.TrimSuffix(path.Base(raw), path.Ext(raw))
 				}
-				zp, frag, _, err := b.resolveHref(ncxPath, raw)
-				entry := TOCEntry{Title: title, Fragment: frag, Chapter: -1, Depth: depth}
+				zp, frag, _, err := l.resolveHref(ncxPath, raw)
+				entry := book.TOCEntry{Title: title, Fragment: frag, Chapter: -1, Depth: depth}
 				if err == nil {
 					entry.Href = zp
 				}
@@ -150,110 +153,4 @@ func (b *Book) parseNCXTOC(data []byte, ncxPath string) ([]TOCEntry, error) {
 	}
 	walk(doc.NavMap.Points, 0)
 	return out, nil
-}
-
-func (b *Book) resolveTOC(entries []TOCEntry) []TOCEntry {
-	out := entries[:0]
-	for _, e := range entries {
-		if e.Href != "" {
-			e.Chapter = b.ChapterByHref(e.Href)
-		}
-		if e.Chapter < 0 {
-			e.Chapter = -1
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
-func (b *Book) fallbackTOC() []TOCEntry {
-	out := make([]TOCEntry, 0, len(b.Chapters))
-	for i := range b.Chapters {
-		ch := &b.Chapters[i]
-		out = append(out, TOCEntry{
-			Title:   chapterFallbackTitle(ch, i),
-			Href:    ch.Href,
-			Chapter: i,
-		})
-	}
-	return out
-}
-
-func (b *Book) fillMissingChapters(entries []TOCEntry) []TOCEntry {
-	seen := make(map[int]bool)
-	for _, e := range entries {
-		if e.Chapter >= 0 {
-			seen[e.Chapter] = true
-		}
-	}
-	for i := range b.Chapters {
-		if seen[i] {
-			continue
-		}
-		entries = append(entries, TOCEntry{
-			Title:   chapterFallbackTitle(&b.Chapters[i], i),
-			Href:    b.Chapters[i].Href,
-			Chapter: i,
-		})
-	}
-	return entries
-}
-
-func chapterFallbackTitle(ch *Chapter, index int) string {
-	switch {
-	case ch.Heading != "":
-		return ch.Heading
-	case ch.DocTitle != "":
-		return ch.DocTitle
-	case path.Base(ch.Href) != "." && path.Base(ch.Href) != "":
-		base := path.Base(ch.Href)
-		return strings.TrimSuffix(base, path.Ext(base))
-	default:
-		return fmt.Sprintf("第 %d 节", index+1)
-	}
-}
-
-func attrValue(n *html.Node, key string) string {
-	for _, a := range n.Attr {
-		// x/net/html keeps foreign attributes such as epub:type with their
-		// prefix in some documents and strips it in others; accept both.
-		if strings.EqualFold(a.Key, key) || strings.EqualFold(a.Key, strings.TrimPrefix(key, "epub:")) {
-			return a.Val
-		}
-	}
-	return ""
-}
-
-func firstChildElement(n *html.Node, tags ...string) *html.Node {
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type != html.ElementNode {
-			continue
-		}
-		for _, tag := range tags {
-			if c.Data == tag {
-				return c
-			}
-		}
-	}
-	return nil
-}
-
-func textContent(n *html.Node) string {
-	var b strings.Builder
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		switch n.Type {
-		case html.TextNode:
-			b.WriteString(n.Data)
-		case html.ElementNode:
-			if n.Data == "script" || n.Data == "style" {
-				return
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(n)
-	return b.String()
 }

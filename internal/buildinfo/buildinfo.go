@@ -3,11 +3,11 @@ package buildinfo
 
 // Version is overridden at build time with:
 //
-//	-ldflags "-X cli-epub-reader/internal/buildinfo.Version=v1.2.3"
+//	-ldflags "-X cli-reader/internal/buildinfo.Version=v1.2.3"
 var Version = "0.3.4"
 
 const (
 	Author   = "Mark24Code"
 	Email    = "mark.zhangyoung@gmail.com"
-	Homepage = "https://github.com/Mark24Code/cli-epub-reader"
+	Homepage = "https://github.com/Mark24Code/cli-reader"
 )

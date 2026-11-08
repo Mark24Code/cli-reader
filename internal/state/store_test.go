@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cli-epub-reader/internal/epub"
+	"cli-reader/internal/book"
 )
 
 func TestStoreRoundTripAndToggles(t *testing.T) {
@@ -28,7 +28,7 @@ func TestStoreRoundTripAndToggles(t *testing.T) {
 	if len(bs.Favorites) != 1 {
 		t.Fatalf("favorites = %d", len(bs.Favorites))
 	}
-	bs.Last = epub.Position{Href: "ch1.xhtml", Percent: 0.4}
+	bs.Last = book.Position{Href: "ch1.xhtml", Percent: 0.4}
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestDefaultPathUsesHomeDotDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)        // unix
 	t.Setenv("USERPROFILE", home) // windows
-	want := filepath.Join(home, ".cli-epub-reader", "state.json")
+	want := filepath.Join(home, ".cli-reader", "state.json")
 	if got := DefaultPath(); got != want {
 		t.Fatalf("DefaultPath() = %q, want %q", got, want)
 	}

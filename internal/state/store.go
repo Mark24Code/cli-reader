@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"cli-epub-reader/internal/epub"
+	"cli-reader/internal/book"
 )
 
 const (
@@ -34,7 +34,7 @@ type BookState struct {
 	Path      string        `json:"path"`
 	Title     string        `json:"title,omitempty"`
 	Author    string        `json:"author,omitempty"`
-	Last      epub.Position `json:"last_position"`
+	Last      book.Position `json:"last_position"`
 	Favorites []Favorite    `json:"favorites,omitempty"`
 }
 
@@ -52,35 +52,50 @@ type Store struct {
 	corrupt bool
 }
 
-// DefaultPath returns ~/.cli-epub-reader/state.json, honouring
-// CLI_EPUB_READER_STATE for an explicit override.
+// DefaultPath returns ~/.cli-reader/state.json, honouring CLI_READER_STATE for
+// an explicit override. CLI_EPUB_READER_STATE is still accepted so existing
+// setups keep working after the program was renamed.
 func DefaultPath() string {
-	if p := strings.TrimSpace(os.Getenv("CLI_EPUB_READER_STATE")); p != "" {
-		return p
+	for _, env := range []string{"CLI_READER_STATE", "CLI_EPUB_READER_STATE"} {
+		if p := strings.TrimSpace(os.Getenv(env)); p != "" {
+			return p
+		}
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".cli-epub-reader", "state.json")
+		return filepath.Join(home, ".cli-reader", "state.json")
 	}
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "cli-epub-reader", "state.json")
+		return filepath.Join(dir, "cli-reader", "state.json")
 	}
-	return filepath.Join(".", ".cli-epub-reader", "state.json")
+	return filepath.Join(".", ".cli-reader", "state.json")
 }
 
-// legacyPath is the config-directory location used by older releases.
-func legacyPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil || dir == "" {
-		return ""
+// legacyPaths lists state files used by earlier program names and versions.
+func legacyPaths() []string {
+	var out []string
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		// ~/.cli-epub-reader was the default before the rename to cli-reader.
+		out = append(out, filepath.Join(home, ".cli-epub-reader", "state.json"))
 	}
-	return filepath.Join(dir, "cli-epub-reader", "state.json")
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		out = append(out,
+			filepath.Join(dir, "cli-epub-reader", "state.json"),
+			filepath.Join(dir, "cli-reader", "state.json"),
+		)
+	}
+	return out
 }
 
 // MigrateLegacy copies an old state file to the default path the first time
-// the new location is used. The legacy file is left in place, so nothing is
-// lost if the user wants to go back. It never overwrites an existing file.
+// the new location is used. Old files are left in place, so nothing is lost if
+// the user wants to go back. It never overwrites an existing file.
 func MigrateLegacy(path string) {
-	migrateLegacyFile(path, legacyPath())
+	for _, legacy := range legacyPaths() {
+		migrateLegacyFile(path, legacy)
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+	}
 }
 
 func migrateLegacyFile(path, legacy string) {

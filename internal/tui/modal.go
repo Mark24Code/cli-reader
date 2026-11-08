@@ -7,10 +7,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"cli-epub-reader/internal/buildinfo"
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/imgterm"
-	"cli-epub-reader/internal/state"
+	"cli-reader/internal/book"
+	"cli-reader/internal/buildinfo"
+	"cli-reader/internal/imgterm"
+	"cli-reader/internal/state"
 )
 
 type modalKind int
@@ -53,8 +53,10 @@ func (m *Model) helpLines() []string {
 		"  鼠标点击链接      跳转到目标章节",
 		"  鼠标拖选          复制选中文本",
 		"  ←/→ 或 h/l        上一节 / 下一节",
-		"  n / p             下一章 / 上一章",
-		"  g / G             章首 / 章尾",
+		"  n / p             下一阅读单元 / 上一个",
+		"  Tab / m           PDF 文本 / 全屏图片模式切换",
+		"                    （图片模式：↑↓ 滚动 · ←→ 翻页 · t 目录 · / 跳转 · -/= 缩放 · q 退出）",
+		"  g / G             首 / 尾",
 		"  Enter             打开视口内图片",
 		"  t                 目录",
 		"  f / s             收藏位置 / 收藏本章",
@@ -69,13 +71,14 @@ func (m *Model) helpLines() []string {
 		"  help / 帮助        打开本帮助",
 		"  about / 关于       作者与版本信息",
 		"  toc / 目录         打开目录",
-		"  下一章 / 上一章    按 spine 文件切换章节",
+		"  下一章 / 上一章    按阅读单元切换",
 		"  下一节 / 上一节    按目录条目切换小节",
 		"  goto 3 / 跳到第三章 按章节号跳转",
 		"  收藏 / 收藏本章    添加位置/章节收藏",
 		"  收藏列表           查看收藏",
 		"  返回               回到上一个跳转位置",
 		"  图片 2             打开本章第 2 张图片",
+		"  文本模式 / 图片模式 切换 PDF 阅读模式",
 		"  目录 / 进度 / 退出 目录 / 状态 / 退出",
 		"",
 		"图片",
@@ -99,15 +102,18 @@ func (m Model) aboutLines(width int) []string {
 		homepage = strings.TrimPrefix(strings.TrimPrefix(homepage, "https://"), "http://")
 	}
 	return []string{
-		"cli-epub-reader",
+		"cli-reader",
 		"版本  " + version,
-		"命令  cli-epub-reader",
+		"命令  cli-reader",
 		"",
 		"作者  " + buildinfo.Author,
 		"邮箱  " + buildinfo.Email,
 		"主页  " + homepage,
 		"",
-		"终端 EPUB 阅读器。",
+		"终端电子书阅读器。",
+		"当前格式  " + m.book.Format.Label(),
+		"当前模式  " + modeLabel(m.book),
+		"支持  EPUB / PDF / TXT / Markdown / HTML / CBZ / MOBI / AZW3",
 	}
 }
 
@@ -312,7 +318,7 @@ func (m Model) favoriteRows(contentW, rows int) []string {
 		if f.Kind == state.FavoritePosition {
 			kind = fmt.Sprintf("位置 %.0f%%", f.Percent*100)
 		}
-		title := epub.SanitizeText(f.ChapterTitle)
+		title := book.SanitizeText(f.ChapterTitle)
 		if title == "" {
 			title = f.Href
 		}
@@ -409,4 +415,17 @@ func padPlainANSI(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-w)
+}
+
+func modeLabel(b *book.Book) string {
+	if b == nil || b.Format != book.FormatPDF {
+		return "默认"
+	}
+	switch b.Mode {
+	case book.ModeImage:
+		return "图片（精确渲染）"
+	case book.ModeText:
+		return "文本（重排）"
+	}
+	return "默认"
 }

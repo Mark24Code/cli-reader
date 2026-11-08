@@ -28,6 +28,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Test (CGO disabled)
+        run: CGO_ENABLED=0 go test ./...
+
   build:
     name: Build ${{ matrix.goos }}
     if: github.ref == 'refs/heads/main'
@@ -67,15 +70,15 @@ jobs:
           for arch in amd64 arm64; do
             echo "building ${GOOS}/${arch}"
             GOARCH="$arch" CGO_ENABLED=0 go build -trimpath \
-              -ldflags="-s -w -X cli-epub-reader/internal/buildinfo.Version=${version}" \
-              -o "dist/cli-epub-reader_${GOOS}_${arch}${ext}" .
+              -ldflags="-s -w -X cli-reader/internal/buildinfo.Version=${version}" \
+              -o "dist/cli-reader_${GOOS}_${arch}${ext}" .
           done
           ls -lh dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cli-epub-reader-${{ matrix.goos }}
+          name: cli-reader-${{ matrix.goos }}
           path: dist/*
           if-no-files-found: error
 

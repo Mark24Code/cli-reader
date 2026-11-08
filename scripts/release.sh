@@ -74,7 +74,7 @@ if ! git remote get-url origin >/dev/null 2>&1; then
 fi
 
 echo
-echo "即将发布 cli-epub-reader $tag"
+echo "即将发布 cli-reader $tag"
 echo "  - 运行 go vet 与全部测试"
 echo "  - 更新 $BUILDINFO 中的版本为 $new_version"
 echo "  - 提交当前所有改动"
@@ -92,7 +92,7 @@ fi
 
 git add -A
 git commit -m "release: $tag"
-git tag -a "$tag" -m "cli-epub-reader $tag"
+git tag -a "$tag" -m "cli-reader $tag"
 git push origin "$branch"
 git push origin "$tag"
 

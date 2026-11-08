@@ -8,7 +8,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"unicode"
+
+	"cli-reader/internal/book"
 )
 
 const (
@@ -18,55 +19,6 @@ const (
 )
 
 var errNotFound = errors.New("file not found in epub")
-
-// SanitizeText removes terminal control characters and normalises common
-// whitespace. EPUBs are untrusted input and must never be able to inject ANSI
-// escape sequences into the TUI.
-func SanitizeText(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '\n':
-			b.WriteByte('\n')
-		case r == '\t':
-			b.WriteByte('\t')
-		case r == ' ' || r == ' ':
-			b.WriteByte(' ')
-		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
-			// Drop C0/C1 controls, including ESC and BEL.
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// CollapseSpace trims and collapses runs of whitespace into one space. It keeps
-// explicit newlines so <br> can create intentional line breaks.
-func CollapseSpace(s string) string {
-	s = SanitizeText(s)
-	var b strings.Builder
-	b.Grow(len(s))
-	space := false
-	for _, r := range s {
-		if r == '\n' {
-			b.WriteByte('\n')
-			space = false
-			continue
-		}
-		if unicode.IsSpace(r) {
-			space = true
-			continue
-		}
-		if space && b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		space = false
-		b.WriteRune(r)
-	}
-	return strings.TrimSpace(b.String())
-}
 
 func normaliseZipPath(p string) string {
 	p = strings.ReplaceAll(p, "\\", "/")
@@ -78,22 +30,22 @@ func normaliseZipPath(p string) string {
 	return p
 }
 
-func (b *Book) findZipFile(name string) *zip.File {
+func (l *loader) findZipFile(name string) *zip.File {
 	name = normaliseZipPath(name)
 	if name == "" {
 		return nil
 	}
-	if f := b.byName[name]; f != nil {
+	if f := l.byName[name]; f != nil {
 		return f
 	}
 	if decoded, err := url.PathUnescape(name); err == nil {
 		decoded = normaliseZipPath(decoded)
-		if f := b.byName[decoded]; f != nil {
+		if f := l.byName[decoded]; f != nil {
 			return f
 		}
 		name = decoded
 	}
-	if f := b.byLower[strings.ToLower(name)]; f != nil {
+	if f := l.byLower[strings.ToLower(name)]; f != nil {
 		return f
 	}
 	return nil
@@ -101,8 +53,8 @@ func (b *Book) findZipFile(name string) *zip.File {
 
 // resolveHref resolves an href found in baseFile (a zip path) to a normalised
 // archive path plus fragment. External URLs and unsafe paths are rejected.
-func (b *Book) resolveHref(baseFile, href string) (zipPath, fragment string, external bool, err error) {
-	href = strings.TrimSpace(SanitizeText(href))
+func (l *loader) resolveHref(baseFile, href string) (zipPath, fragment string, external bool, err error) {
+	href = strings.TrimSpace(book.SanitizeText(href))
 	if href == "" {
 		return "", "", false, errNotFound
 	}
@@ -136,14 +88,14 @@ func (b *Book) resolveHref(baseFile, href string) (zipPath, fragment string, ext
 	if joined == "" {
 		return "", fragment, false, fmt.Errorf("unsafe href %q", href)
 	}
-	if b.findZipFile(joined) == nil {
+	if l.findZipFile(joined) == nil {
 		return joined, fragment, false, errNotFound
 	}
 	return joined, fragment, false, nil
 }
 
-func (b *Book) readZip(name string, limit int64) ([]byte, error) {
-	f := b.findZipFile(name)
+func (l *loader) readZip(name string, limit int64) ([]byte, error) {
+	f := l.findZipFile(name)
 	if f == nil {
 		return nil, errNotFound
 	}
@@ -165,72 +117,42 @@ func (b *Book) readZip(name string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func (b *Book) ReadFile(name string) ([]byte, error) {
-	return b.readZip(name, maxChapterBytes)
+// ReadFile implements book.FileProvider.
+func (l *loader) ReadFile(name string) ([]byte, error) {
+	return l.readZip(name, maxChapterBytes)
 }
 
-// ImageBytes returns the raw image data and a detected media type.
-func (b *Book) ImageBytes(name string) ([]byte, string, error) {
+// ImageBytes implements book.ImageProvider.
+func (l *loader) ImageBytes(name string) ([]byte, string, error) {
 	name = normaliseZipPath(name)
 	if name == "" {
 		return nil, "", errNotFound
 	}
-	b.imageMu.Lock()
-	if data, ok := b.imageCache[name]; ok {
-		b.imageMu.Unlock()
-		return data, mediaTypeFor(name, data), nil
+	l.imageMu.Lock()
+	if data, ok := l.imageCache[name]; ok {
+		l.imageMu.Unlock()
+		return data, book.MediaTypeFor(name, data), nil
 	}
-	b.imageMu.Unlock()
+	l.imageMu.Unlock()
 
-	data, err := b.readZip(name, maxImageBytes)
+	data, err := l.readZip(name, maxImageBytes)
 	if err != nil {
 		return nil, "", err
 	}
-	mt := mediaTypeFor(name, data)
+	mt := book.MediaTypeFor(name, data)
 
-	b.imageMu.Lock()
-	if b.imageCache == nil {
-		b.imageCache = make(map[string][]byte)
+	l.imageMu.Lock()
+	if l.imageCache == nil {
+		l.imageCache = make(map[string][]byte)
 	}
-	if b.imageBytes+int64(len(data)) <= maxImageCache {
-		b.imageCache[name] = data
-		b.imageBytes += int64(len(data))
+	if l.imageBytes+int64(len(data)) <= maxImageCache {
+		l.imageCache[name] = data
+		l.imageBytes += int64(len(data))
 	} else {
 		// Simple pressure valve: drop the cache rather than grow without bound.
-		b.imageCache = map[string][]byte{name: data}
-		b.imageBytes = int64(len(data))
+		l.imageCache = map[string][]byte{name: data}
+		l.imageBytes = int64(len(data))
 	}
-	b.imageMu.Unlock()
+	l.imageMu.Unlock()
 	return data, mt, nil
-}
-
-func mediaTypeFor(name string, data []byte) string {
-	ext := strings.ToLower(path.Ext(name))
-	switch ext {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg", ".jpe":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".svg", ".svgz":
-		return "image/svg+xml"
-	case ".bmp":
-		return "image/bmp"
-	}
-	if len(data) > 0 {
-		switch {
-		case len(data) > 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
-			return "image/png"
-		case len(data) > 3 && data[0] == 0xff && data[1] == 0xd8:
-			return "image/jpeg"
-		case len(data) > 6 && string(data[:6]) == "GIF87a", len(data) > 6 && string(data[:6]) == "GIF89a":
-			return "image/gif"
-		case len(data) > 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
-			return "image/webp"
-		}
-	}
-	return "application/octet-stream"
 }

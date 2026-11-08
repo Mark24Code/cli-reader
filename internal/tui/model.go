@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -8,10 +9,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/imgterm"
-	"cli-epub-reader/internal/render"
-	"cli-epub-reader/internal/state"
+	"cli-reader/internal/book"
+	"cli-reader/internal/imgterm"
+	"cli-reader/internal/pdfbook"
+	"cli-reader/internal/render"
+	"cli-reader/internal/state"
 )
 
 const (
@@ -36,7 +38,7 @@ type viewerDoneMsg struct {
 }
 
 type Model struct {
-	book      *epub.Book
+	book      *book.Book
 	renderer  *render.Renderer
 	store     *state.Store
 	bookState *state.BookState
@@ -54,6 +56,11 @@ type Model struct {
 
 	chapter int
 	content *render.RenderedChapter
+
+	pdfMode          string
+	pdfTextBook      *book.Book
+	pdfImageBook     *book.Book
+	requestImageMode bool
 
 	// tocCursor remembers which TOC entry ←/→last landed on. It lets section
 	// navigation keep stepping even when a short chapter clamps the viewport so
@@ -76,10 +83,10 @@ type Model struct {
 	selection  selectionState
 }
 
-func New(book *epub.Book, store *state.Store, key string, protocol imgterm.Protocol) Model {
+func New(bk *book.Book, store *state.Store, key string, protocol imgterm.Protocol) Model {
 	m := Model{
-		book:       book,
-		renderer:   render.NewRenderer(book),
+		book:       bk,
+		renderer:   render.NewRenderer(bk),
 		store:      store,
 		bookKey:    key,
 		protocol:   protocol,
@@ -88,8 +95,23 @@ func New(book *epub.Book, store *state.Store, key string, protocol imgterm.Proto
 		cmdHistPos: -1,
 		tocCursor:  -1,
 	}
-	m.bookState = store.Book(key, book.Path, book.Title, book.Author)
-	if idx := book.ChapterByHref(m.bookState.Last.Href); idx >= 0 {
+	if bk.Format == book.FormatPDF {
+		m.pdfMode = bk.Mode
+		if m.pdfMode == "" {
+			if bk.PageMode {
+				m.pdfMode = book.ModeImage
+			} else {
+				m.pdfMode = book.ModeText
+			}
+		}
+		if m.pdfMode == book.ModeImage {
+			m.pdfImageBook = bk
+		} else {
+			m.pdfTextBook = bk
+		}
+	}
+	m.bookState = store.Book(key, bk.Path, bk.Title, bk.Author)
+	if idx := bk.ChapterByHref(m.bookState.Last.Href); idx >= 0 {
 		m.chapter = idx
 		m.initialHref = m.bookState.Last.Href
 		m.initialPercent = m.bookState.Last.Percent
@@ -106,8 +128,26 @@ func New(book *epub.Book, store *state.Store, key string, protocol imgterm.Proto
 	if err := store.Warning(); err != nil {
 		m.noticeError = true
 		m.notice = err.Error()
+	} else if bk.Format == book.FormatPDF {
+		mode := "图片"
+		if m.pdfMode == book.ModeText {
+			mode = "文本"
+		}
+		notice := fmt.Sprintf("PDF %s模式 · 按 m 切换文本/图片", mode)
+		for _, w := range bk.Warnings {
+			if strings.Contains(w, "图片模式不可用") {
+				notice = "PDF 文本模式（图片模式不可用，按 m 重试）"
+				break
+			}
+		}
+		if m.hasInitial && m.initialPercent > 0.005 {
+			notice = "已恢复阅读位置 · " + notice
+		}
+		m.notice = notice
 	} else if m.hasInitial && m.initialPercent > 0.005 {
 		m.notice = "已恢复上次阅读位置"
+	} else if len(bk.Warnings) > 0 {
+		m.notice = fmt.Sprintf("已打开，但有 %d 条解析提示", len(bk.Warnings))
 	} else {
 		m.notice = "按 / 输入命令 · ? 查看帮助 · Enter 打开可见图片"
 	}
@@ -118,12 +158,137 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// WantsImageMode reports that the TUI should exit so main can start the
+// full-screen native PDF image viewer.
+func (m Model) WantsImageMode() bool { return m.requestImageMode }
+
+func (m *Model) requestPDFImage() tea.Cmd {
+	if m.book == nil || m.book.Format != book.FormatPDF {
+		m.setNotice("只有 PDF 支持文本/图片模式切换", true)
+		return nil
+	}
+	if m.pdfMode == book.ModeImage {
+		return nil
+	}
+	if m.protocol == imgterm.ProtocolNone {
+		m.setNotice("当前终端不支持原生图片协议，无法使用 PDF 图片模式；请使用 iTerm2 / Kitty / WezTerm", true)
+		return nil
+	}
+	m.requestImageMode = true
+	m.setNotice("正在切换到 PDF 图片模式...", false)
+	return tea.Quit
+}
+
+func (m *Model) togglePDFMode() tea.Cmd {
+	if m.book == nil || m.book.Format != book.FormatPDF {
+		m.setNotice("只有 PDF 支持文本/图片模式切换", true)
+		return nil
+	}
+	if m.pdfMode == book.ModeImage {
+		m.setPDFMode(book.ModeText)
+		return nil
+	}
+	return m.requestPDFImage()
+}
+
+func (m *Model) setPDFMode(target string) {
+	if m.book == nil || m.book.Format != book.FormatPDF {
+		m.setNotice("只有 PDF 支持文本/图片模式切换", true)
+		return
+	}
+	if target != book.ModeText && target != book.ModeImage {
+		return
+	}
+	if target == m.pdfMode {
+		return
+	}
+	if target == book.ModeImage && m.protocol == imgterm.ProtocolNone {
+		m.setNotice("当前终端不支持原生图片协议，无法使用 PDF 图片模式；请使用 iTerm2 / Kitty / WezTerm", true)
+		return
+	}
+
+	var next *book.Book
+	switch target {
+	case book.ModeImage:
+		if m.pdfImageBook != nil {
+			next = m.pdfImageBook
+		} else {
+			b, err := pdfbook.OpenImage(m.book.Path)
+			if err != nil {
+				if errors.Is(err, pdfbook.ErrImageModeUnsupported) {
+					m.setNotice("图片模式不可用：未找到 sips / pdftoppm / mutool / gs / ImageMagick，请安装后重试", true)
+				} else {
+					m.setNotice("切换到图片模式失败: "+err.Error(), true)
+				}
+				return
+			}
+			m.pdfImageBook = b
+			next = b
+		}
+	case book.ModeText:
+		if m.pdfTextBook != nil {
+			next = m.pdfTextBook
+		} else {
+			b, err := pdfbook.OpenText(m.book.Path)
+			if err != nil {
+				m.setNotice("切换到文本模式失败: "+err.Error(), true)
+				return
+			}
+			m.pdfTextBook = b
+			next = b
+		}
+	default:
+		return
+	}
+
+	if m.pdfMode == book.ModeImage {
+		m.pdfImageBook = m.book
+	} else {
+		m.pdfTextBook = m.book
+	}
+	m.book = next
+	m.pdfMode = target
+	m.book.Mode = target
+	m.renderer = render.NewRenderer(next)
+	if m.store != nil {
+		m.bookState = m.store.Book(m.bookKey, next.Path, next.Title, next.Author)
+	}
+	if m.chapter >= len(next.Chapters) {
+		m.chapter = len(next.Chapters) - 1
+	}
+	if m.chapter < 0 {
+		m.chapter = 0
+	}
+	m.content = nil
+	m.hasRendered = false
+	m.hasInitial = false
+	m.initialHref = ""
+	m.initialPercent = 0
+	m.tocCursor = -1
+	m.renderAt(0, "", false, false)
+	m.hasRendered = true
+	label := "文本"
+	if target == book.ModeImage {
+		label = "图片"
+	}
+	m.setNotice("已切换到 PDF "+label+"模式 · 按 m 切换", false)
+}
+
 func (m Model) bodyHeight() int {
 	h := m.height - 6
 	if h < 1 {
 		h = 1
 	}
 	return h
+}
+
+// unit returns the reading-unit label: 章 for EPUB, 节 for text, 页 for
+// PDF/CBZ.
+func (m Model) unit() string {
+	if m.book == nil {
+		return "章"
+	}
+	return m.book.UnitLabel("章")
 }
 
 func (m *Model) ensureSize(width, height int) {
@@ -177,7 +342,21 @@ func (m *Model) renderAt(percent float64, fragment string, atBottom, atTop bool)
 		return
 	}
 	ch := &m.book.Chapters[m.chapter]
-	m.content = m.renderer.RenderChapter(ch, m.width, render.Options{})
+	opts := render.Options{}
+	if m.book.PageMode || ch.PageMode {
+		opts.FullPage = true
+		opts.MaxImageCols = max(8, m.width-2)
+		if m.book.Format == book.FormatPDF && m.book.Mode == book.ModeImage {
+			// Use the full terminal width so the rasterized page is as precise
+			// as a character thumbnail can be; the page scrolls vertically.
+			opts.MaxImageRows = 4096
+		} else {
+			opts.MaxImageRows = max(2, m.bodyHeight()-2)
+		}
+	} else {
+		opts.MaxImageRows = min(14, max(2, m.bodyHeight()-2))
+	}
+	m.content = m.renderer.RenderChapter(ch, m.width, opts)
 	m.viewport.Width = m.width
 	m.viewport.Height = m.bodyHeight()
 	m.viewport.SetContent(strings.Join(m.content.Lines, "\n"))
@@ -242,7 +421,7 @@ func (m *Model) syncLast() {
 	if m.bookState == nil || m.content == nil {
 		return
 	}
-	m.bookState.Last = epub.Position{Href: m.book.Chapters[m.chapter].Href, Percent: m.currentPercent()}
+	m.bookState.Last = book.Position{Href: m.book.Chapters[m.chapter].Href, Percent: m.currentPercent()}
 }
 
 func (m *Model) saveLast() error {
@@ -270,7 +449,7 @@ func (m *Model) pushHistory() {
 
 func (m *Model) goToChapter(index int, fragment string, percent float64, atBottom bool, push bool) {
 	if index < 0 || index >= len(m.book.Chapters) {
-		m.setNotice("章节不存在", true)
+		m.setNotice("内容不存在", true)
 		return
 	}
 	if push {
@@ -280,7 +459,7 @@ func (m *Model) goToChapter(index int, fragment string, percent float64, atBotto
 	m.tocCursor = -1
 	m.renderAt(percent, fragment, atBottom, false)
 	ch := m.book.Chapters[index]
-	m.setNotice(fmt.Sprintf("第 %d/%d 章 · %s", index+1, len(m.book.Chapters), ch.Title), false)
+	m.setNotice(fmt.Sprintf("第 %d/%d %s · %s", index+1, len(m.book.Chapters), m.unit(), ch.Title), false)
 }
 
 func (m *Model) goBack() {
@@ -292,18 +471,18 @@ func (m *Model) goBack() {
 	m.history = m.history[:len(m.history)-1]
 	idx := m.book.ChapterByHref(loc.Href)
 	if idx < 0 {
-		m.setNotice("历史位置对应的章节已不存在", true)
+		m.setNotice("历史位置对应的阅读单元已不存在", true)
 		return
 	}
 	m.chapter = idx
 	m.tocCursor = -1
 	m.renderAt(loc.Percent, "", false, false)
-	m.setNotice(fmt.Sprintf("已返回 · 第 %d 章", idx+1), false)
+	m.setNotice(fmt.Sprintf("已返回 · 第 %d %s", idx+1, m.unit()), false)
 }
 
 func (m *Model) nextChapter(atBottom bool) {
 	if m.chapter >= len(m.book.Chapters)-1 {
-		m.setNotice("已经是最后一章", false)
+		m.setNotice(fmt.Sprintf("已经是最后一%s", m.unit()), false)
 		return
 	}
 	m.goToChapter(m.chapter+1, "", 0, atBottom, true)
@@ -311,7 +490,7 @@ func (m *Model) nextChapter(atBottom bool) {
 
 func (m *Model) prevChapter(atBottom bool) {
 	if m.chapter <= 0 {
-		m.setNotice("已经是第一章", false)
+		m.setNotice(fmt.Sprintf("已经是第一%s", m.unit()), false)
 		return
 	}
 	m.goToChapter(m.chapter-1, "", 0, atBottom, true)
@@ -422,7 +601,7 @@ func (m *Model) goToTOCEntry(index int) {
 	if title == "" {
 		title = m.book.Chapters[entry.Chapter].Title
 	}
-	m.setNotice(fmt.Sprintf("第 %d/%d 章 · %s", entry.Chapter+1, len(m.book.Chapters), title), false)
+	m.setNotice(fmt.Sprintf("第 %d/%d %s · %s", entry.Chapter+1, len(m.book.Chapters), m.unit(), title), false)
 }
 
 func (m *Model) scrollDown(page bool) {
@@ -529,7 +708,7 @@ func (m *Model) runAction(a Action) tea.Cmd {
 		m.prevSection()
 	case ActionGotoChapter:
 		if a.Chapter < 1 || a.Chapter > len(m.book.Chapters) {
-			m.setNotice(fmt.Sprintf("章节号应在 1–%d 之间", len(m.book.Chapters)), true)
+			m.setNotice(fmt.Sprintf("编号应在 1–%d 之间", len(m.book.Chapters)), true)
 			return nil
 		}
 		m.goToChapter(a.Chapter-1, "", 0, false, true)
@@ -551,9 +730,13 @@ func (m *Model) runAction(a Action) tea.Cmd {
 		m.goBack()
 	case ActionOpenImage:
 		return m.openImage(a.Image)
+	case ActionPDFTextMode:
+		m.setPDFMode(book.ModeText)
+	case ActionPDFImageMode:
+		return m.requestPDFImage()
 	case ActionStatus:
-		m.setNotice(fmt.Sprintf("第 %d/%d 章 · 章内 %.0f%% · 收藏 %d 条",
-			m.chapter+1, len(m.book.Chapters), m.currentPercent()*100, len(m.bookState.Favorites)), false)
+		m.setNotice(fmt.Sprintf("第 %d/%d %s · 单元内 %.0f%% · 收藏 %d 条",
+			m.chapter+1, len(m.book.Chapters), m.unit(), m.currentPercent()*100, len(m.bookState.Favorites)), false)
 	case ActionQuit:
 		return tea.Quit
 	case ActionUnknown:

@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/theme"
+	"cli-reader/internal/book"
+	"cli-reader/internal/theme"
 )
 
 type cell struct {
@@ -34,7 +34,7 @@ type chunk struct {
 	hardBreak   bool
 }
 
-func layoutSpans(spans []epub.Span, width int, base Style, styleFor func(epub.Span, Style) Style) [][]cell {
+func layoutSpans(spans []book.Span, width int, base Style, styleFor func(book.Span, Style) Style) [][]cell {
 	if width < 1 {
 		width = 1
 	}
@@ -190,7 +190,7 @@ func lineWidth(cells []cell) int {
 	return n
 }
 
-func spanStyle(sp epub.Span, base Style) Style {
+func spanStyle(sp book.Span, base Style) Style {
 	st := base
 	if sp.Bold {
 		st.Bold = true
@@ -264,12 +264,12 @@ func collectLineLinks(cells []cell) []lineLink {
 	return out
 }
 
-func wrapStyledLines(spans []epub.Span, width int, base Style, firstPrefix, contPrefix string) []string {
+func wrapStyledLines(spans []book.Span, width int, base Style, firstPrefix, contPrefix string) []string {
 	lines, _ := wrapStyledLinesWithLinks(spans, width, base, firstPrefix, contPrefix)
 	return lines
 }
 
-func wrapStyledLinesWithLinks(spans []epub.Span, width int, base Style, firstPrefix, contPrefix string) ([]string, [][]lineLink) {
+func wrapStyledLinesWithLinks(spans []book.Span, width int, base Style, firstPrefix, contPrefix string) ([]string, [][]lineLink) {
 	if width <= 0 {
 		return nil, nil
 	}

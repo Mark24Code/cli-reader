@@ -2,6 +2,9 @@ package render_test
 
 import (
 	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"slices"
 	"strings"
 	"testing"
@@ -9,12 +12,67 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/render"
-	"cli-epub-reader/internal/testepub"
+	bookmodel "cli-reader/internal/book"
+	"cli-reader/internal/epub"
+	"cli-reader/internal/render"
+	"cli-reader/internal/testepub"
 )
 
-func sampleBook(t *testing.T) *epub.Book {
+type mapImages map[string][]byte
+
+func (m mapImages) ImageBytes(path string) ([]byte, string, error) {
+	data, ok := m[path]
+	if !ok {
+		return nil, "", image.ErrFormat
+	}
+	return data, "image/png", nil
+}
+
+func TestFullPageImage(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 40, 80))
+	for y := 0; y < 80; y++ {
+		for x := 0; x < 40; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 6), G: uint8(y * 3), B: 90, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	ch := &bookmodel.Chapter{
+		Index:    0,
+		Href:     "page-1.png",
+		Title:    "第 1 页",
+		PageMode: true,
+		Blocks: []bookmodel.Block{{
+			Kind:  bookmodel.BlockImage,
+			Image: &bookmodel.ImageRef{Path: "page-1.png"},
+		}},
+	}
+	r := render.NewRenderer(mapImages{"page-1.png": buf.Bytes()})
+	rc := r.RenderChapter(ch, 80, render.Options{
+		FullPage:     true,
+		MaxImageCols: 78,
+		MaxImageRows: 16,
+	})
+	plain := ansi.Strip(strings.Join(rc.Lines, "\n"))
+	if strings.Contains(plain, "✻ Claude") || strings.Contains(plain, "正在阅读") {
+		t.Fatalf("full page kept decorative header:\n%s", plain)
+	}
+	if len(rc.Images) != 1 {
+		t.Fatalf("images = %d", len(rc.Images))
+	}
+	if len(rc.Lines) > 16 {
+		t.Fatalf("full page used %d lines, want <= 16", len(rc.Lines))
+	}
+	for i, line := range rc.Lines {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Fatalf("line %d width %d > 80", i, w)
+		}
+	}
+}
+
+func sampleBook(t *testing.T) *bookmodel.Book {
 	t.Helper()
 	data, err := testepub.BuildSample(testepub.DefaultOptions())
 	if err != nil {
@@ -170,11 +228,11 @@ func contains(s, sub string) bool {
 	return bytes.Contains([]byte(s), []byte(sub))
 }
 
-func tableChapter(caption []epub.Span, rows [][]epub.TableCell) *epub.Chapter {
-	return &epub.Chapter{
+func tableChapter(caption []bookmodel.Span, rows [][]bookmodel.TableCell) *bookmodel.Chapter {
+	return &bookmodel.Chapter{
 		Index: 0,
-		Blocks: []epub.Block{{
-			Kind:         epub.BlockTable,
+		Blocks: []bookmodel.Block{{
+			Kind:         bookmodel.BlockTable,
 			Table:        rows,
 			TableCaption: caption,
 		}},
@@ -195,18 +253,18 @@ func borderColumns(line string) []int {
 }
 
 func TestTableRendersAlignedGrid(t *testing.T) {
-	ch := tableChapter(nil, [][]epub.TableCell{
+	ch := tableChapter(nil, [][]bookmodel.TableCell{
 		{
-			{Spans: []epub.Span{{Text: "功能"}}, Header: true},
-			{Spans: []epub.Span{{Text: "入口"}}, Header: true},
+			{Spans: []bookmodel.Span{{Text: "功能"}}, Header: true},
+			{Spans: []bookmodel.Span{{Text: "入口"}}, Header: true},
 		},
 		{
-			{Spans: []epub.Span{{Text: "目录", Bold: true}}},
-			{Spans: []epub.Span{{Text: "t", Italic: true}}},
+			{Spans: []bookmodel.Span{{Text: "目录", Bold: true}}},
+			{Spans: []bookmodel.Span{{Text: "t", Italic: true}}},
 		},
 		{
-			{Spans: []epub.Span{{Text: "收藏"}}},
-			{Spans: []epub.Span{{Text: "f / s"}}},
+			{Spans: []bookmodel.Span{{Text: "收藏"}}},
+			{Spans: []bookmodel.Span{{Text: "f / s"}}},
 		},
 	})
 	rc := render.NewRenderer(nil).RenderChapter(ch, 60, render.Options{})
@@ -253,21 +311,21 @@ func TestTableRendersAlignedGrid(t *testing.T) {
 }
 
 func TestTableMergesColspanAndRowspan(t *testing.T) {
-	ch := tableChapter([]epub.Span{{Text: "合并单元格"}}, [][]epub.TableCell{
+	ch := tableChapter([]bookmodel.Span{{Text: "合并单元格"}}, [][]bookmodel.TableCell{
 		{
-			{Spans: []epub.Span{{Text: "A"}}, Header: true},
-			{Spans: []epub.Span{{Text: "B"}}, Header: true},
-			{Spans: []epub.Span{{Text: "C"}}, Header: true},
+			{Spans: []bookmodel.Span{{Text: "A"}}, Header: true},
+			{Spans: []bookmodel.Span{{Text: "B"}}, Header: true},
+			{Spans: []bookmodel.Span{{Text: "C"}}, Header: true},
 		},
-		{{Spans: []epub.Span{{Text: "横跨三列的说明"}}, ColSpan: 3, Align: "center"}},
+		{{Spans: []bookmodel.Span{{Text: "横跨三列的说明"}}, ColSpan: 3, Align: "center"}},
 		{
-			{Spans: []epub.Span{{Text: "x"}}},
-			{Spans: []epub.Span{{Text: "y"}}, RowSpan: 2},
-			{Spans: []epub.Span{{Text: "z"}}},
+			{Spans: []bookmodel.Span{{Text: "x"}}},
+			{Spans: []bookmodel.Span{{Text: "y"}}, RowSpan: 2},
+			{Spans: []bookmodel.Span{{Text: "z"}}},
 		},
 		{
-			{Spans: []epub.Span{{Text: "1"}}},
-			{Spans: []epub.Span{{Text: "2"}}},
+			{Spans: []bookmodel.Span{{Text: "1"}}},
+			{Spans: []bookmodel.Span{{Text: "2"}}},
 		},
 	})
 	rc := render.NewRenderer(nil).RenderChapter(ch, 60, render.Options{})
@@ -301,13 +359,13 @@ func TestTableMergesColspanAndRowspan(t *testing.T) {
 }
 
 func TestTableFallsBackWhenColumnsCannotFit(t *testing.T) {
-	header := make([]epub.TableCell, 6)
-	data := make([]epub.TableCell, 6)
+	header := make([]bookmodel.TableCell, 6)
+	data := make([]bookmodel.TableCell, 6)
 	for i := 0; i < 6; i++ {
-		header[i] = epub.TableCell{Spans: []epub.Span{{Text: []string{"一", "二", "三", "四", "五", "六"}[i]}}, Header: true}
-		data[i] = epub.TableCell{Spans: []epub.Span{{Text: []string{"a", "b", "c", "d", "e", "f"}[i]}}}
+		header[i] = bookmodel.TableCell{Spans: []bookmodel.Span{{Text: []string{"一", "二", "三", "四", "五", "六"}[i]}}, Header: true}
+		data[i] = bookmodel.TableCell{Spans: []bookmodel.Span{{Text: []string{"a", "b", "c", "d", "e", "f"}[i]}}}
 	}
-	ch := tableChapter(nil, [][]epub.TableCell{header, data})
+	ch := tableChapter(nil, [][]bookmodel.TableCell{header, data})
 	rc := render.NewRenderer(nil).RenderChapter(ch, 20, render.Options{})
 	joined := strings.Join(rc.Lines, "\n")
 	if strings.Contains(joined, "┌") {

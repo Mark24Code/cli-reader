@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"cli-epub-reader/internal/render"
+	"cli-reader/internal/render"
 )
 
 func sendMouse(t *testing.T, m Model, button tea.MouseButton, x, y int) Model {

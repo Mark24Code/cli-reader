@@ -2,6 +2,9 @@ package tui
 
 import (
 	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,11 +12,22 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"cli-epub-reader/internal/epub"
-	"cli-epub-reader/internal/imgterm"
-	"cli-epub-reader/internal/state"
-	"cli-epub-reader/internal/testepub"
+	bookmodel "cli-reader/internal/book"
+	"cli-reader/internal/epub"
+	"cli-reader/internal/imgterm"
+	"cli-reader/internal/state"
+	"cli-reader/internal/testepub"
 )
+
+type testImages map[string][]byte
+
+func (m testImages) ImageBytes(path string) ([]byte, string, error) {
+	data, ok := m[path]
+	if !ok {
+		return nil, "", image.ErrFormat
+	}
+	return data, "image/png", nil
+}
 
 func testModel(t *testing.T) Model {
 	t.Helper()
@@ -21,13 +35,13 @@ func testModel(t *testing.T) Model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	book, err := epub.OpenReaderAt(bytes.NewReader(data), int64(len(data)), "demo.epub")
+	bk, err := epub.OpenReaderAt(bytes.NewReader(data), int64(len(data)), "demo.epub")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = book.Close() })
+	t.Cleanup(func() { _ = bk.Close() })
 	store := state.Load(filepath.Join(t.TempDir(), "state.json"))
-	m := New(book, store, state.BookKey("demo.epub"), imgterm.ProtocolNone)
+	m := New(bk, store, state.BookKey("demo.epub"), imgterm.ProtocolNone)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return next.(Model)
 }
@@ -60,7 +74,7 @@ func TestModelLayoutAndResize(t *testing.T) {
 	m := testModel(t)
 	assertViewWidth(t, m)
 	view := ansi.Strip(m.View())
-	if !strings.Contains(view, "cli-epub-reader") {
+	if !strings.Contains(view, "cli-reader") {
 		t.Fatalf("header missing project name:\n%s", view)
 	}
 	if !strings.Contains(view, "终端里的 Claude") {
@@ -138,8 +152,8 @@ func TestAboutModal(t *testing.T) {
 	assertViewWidth(t, m)
 	view := ansi.Strip(m.View())
 	for _, want := range []string{
-		"关于", "cli-epub-reader", "Mark24Code", "mark.zhangyoung@gmail.com",
-		"github.com/Mark24Code/cli-epub-reader",
+		"关于", "cli-reader", "Mark24Code", "mark.zhangyoung@gmail.com",
+		"github.com/Mark24Code/cli-reader",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("about view missing %q:\n%s", want, view)
@@ -291,4 +305,77 @@ func TestResizePreservesApproximatePosition(t *testing.T) {
 	if before == 0 {
 		t.Fatal("expected non-zero scroll position")
 	}
+}
+
+func TestPDFModeToggleOnlyForPDF(t *testing.T) {
+	m := testModel(t)
+	m = sendKey(t, m, keyRunes("m"))
+	if !m.noticeError || !strings.Contains(m.notice, "只有 PDF") {
+		t.Fatalf("notice = %q (error=%v)", m.notice, m.noticeError)
+	}
+}
+
+func TestRequestPDFImage(t *testing.T) {
+	b := &bookmodel.Book{
+		Format:   bookmodel.FormatPDF,
+		Mode:     bookmodel.ModeText,
+		Chapters: []bookmodel.Chapter{{Href: "pdf:page-0001"}},
+	}
+	m := Model{book: b, protocol: imgterm.ProtocolITerm2, pdfMode: bookmodel.ModeText}
+	if cmd := m.requestPDFImage(); cmd == nil || !m.WantsImageMode() {
+		t.Fatalf("image request not raised: cmd=%v wants=%v", cmd, m.WantsImageMode())
+	}
+
+	m = Model{book: b, protocol: imgterm.ProtocolNone, pdfMode: bookmodel.ModeText}
+	if cmd := m.requestPDFImage(); cmd != nil || m.WantsImageMode() {
+		t.Fatalf("image request should be rejected: cmd=%v wants=%v", cmd, m.WantsImageMode())
+	}
+	if !m.noticeError || !strings.Contains(m.notice, "原生图片协议") {
+		t.Fatalf("notice = %q (error=%v)", m.notice, m.noticeError)
+	}
+}
+
+func TestComicPageModeFillsViewport(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 40, 80))
+	for y := 0; y < 80; y++ {
+		for x := 0; x < 40; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 6), G: uint8(y * 3), B: 100, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	b := &bookmodel.Book{
+		Path:     "comic.cbz",
+		Title:    "测试漫画",
+		Format:   bookmodel.FormatCBZ,
+		Unit:     "页",
+		PageMode: true,
+		Chapters: []bookmodel.Chapter{{
+			Href:     "page1.png",
+			Title:    "第 1 页",
+			PageMode: true,
+			Blocks: []bookmodel.Block{{
+				Kind:  bookmodel.BlockImage,
+				Image: &bookmodel.ImageRef{Path: "page1.png"},
+			}},
+		}},
+	}
+	b.SetImageProvider(testImages{"page1.png": buf.Bytes()})
+	store := state.Load(filepath.Join(t.TempDir(), "state.json"))
+	m := New(b, store, state.BookKey("comic.cbz"), imgterm.ProtocolNone)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	if m.content == nil || len(m.content.Images) != 1 {
+		t.Fatalf("page image was not rendered: %#v", m.content)
+	}
+	joined := ansi.Strip(strings.Join(m.content.Lines, "\n"))
+	if strings.Contains(joined, "正在阅读") || strings.Contains(joined, "✻ Claude") {
+		t.Fatalf("page mode kept decorative header:\n%s", joined)
+	}
+	if len(m.content.Lines) > m.bodyHeight() {
+		t.Fatalf("page used %d lines, body height %d", len(m.content.Lines), m.bodyHeight())
+	}
+	assertViewWidth(t, m)
 }

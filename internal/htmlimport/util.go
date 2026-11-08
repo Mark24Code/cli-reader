@@ -1,4 +1,4 @@
-package epub
+package htmlimport
 
 import (
 	"strconv"
@@ -6,10 +6,12 @@ import (
 	"unicode"
 
 	"golang.org/x/net/html"
+
+	"cli-reader/internal/book"
 )
 
-func styledSpan(style inlineStyle, text string) Span {
-	return Span{
+func styledSpan(style inlineStyle, text string) book.Span {
+	return book.Span{
 		Text:      text,
 		Bold:      style.bold,
 		Italic:    style.italic,
@@ -26,7 +28,7 @@ func applyNodeStyle(n *html.Node, style *inlineStyle) {
 	if n == nil || style == nil {
 		return
 	}
-	css := strings.ToLower(attrValue(n, "style"))
+	css := strings.ToLower(Attr(n, "style"))
 	if css == "" {
 		return
 	}
@@ -65,13 +67,13 @@ func applyNodeStyle(n *html.Node, style *inlineStyle) {
 	}
 }
 
-func (p *chapterParser) addBlock(block Block, extraAnchors []string) int {
+func (p *chapterParser) addBlock(block book.Block, extraAnchors []string) int {
 	idx := len(p.ch.Blocks)
 	p.ch.Blocks = append(p.ch.Blocks, block)
 	anchors := append(p.pending, extraAnchors...)
 	p.pending = nil
 	for _, name := range anchors {
-		name = strings.TrimSpace(SanitizeText(name))
+		name = strings.TrimSpace(book.SanitizeText(name))
 		if name == "" {
 			continue
 		}
@@ -87,26 +89,26 @@ func elementAnchorNames(n *html.Node) []string {
 		return nil
 	}
 	var names []string
-	if id := strings.TrimSpace(attrValue(n, "id")); id != "" {
+	if id := strings.TrimSpace(Attr(n, "id")); id != "" {
 		names = append(names, id)
 	}
-	if id := strings.TrimSpace(attrValue(n, "xml:id")); id != "" {
+	if id := strings.TrimSpace(Attr(n, "xml:id")); id != "" {
 		names = append(names, id)
 	}
 	if n.Data == "a" {
-		if name := strings.TrimSpace(attrValue(n, "name")); name != "" {
+		if name := strings.TrimSpace(Attr(n, "name")); name != "" {
 			names = append(names, name)
 		}
 	}
 	return names
 }
 
-func sameStyle(a, b Span) bool {
+func sameStyle(a, b book.Span) bool {
 	return a.Bold == b.Bold && a.Italic == b.Italic && a.Code == b.Code &&
 		a.Underline == b.Underline && a.Link == b.Link
 }
 
-func appendStyled(spans []Span, sp Span) []Span {
+func appendStyled(spans []book.Span, sp book.Span) []book.Span {
 	if sp.Text == "" {
 		return spans
 	}
@@ -119,10 +121,10 @@ func appendStyled(spans []Span, sp Span) []Span {
 
 // normalizeSpans collapses whitespace, trims line edges and merges adjacent
 // runs with identical styling. Newlines are preserved as hard breaks.
-func normalizeSpans(in []Span) []Span {
-	var out []Span
+func normalizeSpans(in []book.Span) []book.Span {
+	var out []book.Span
 	pendingSpace := false
-	appendRune := func(style Span, r rune) {
+	appendRune := func(style book.Span, r rune) {
 		style.Text = string(r)
 		if len(out) > 0 {
 			last := &out[len(out)-1]
@@ -155,7 +157,7 @@ func normalizeSpans(in []Span) []Span {
 		}
 		style := sp
 		style.Text = ""
-		for _, r := range SanitizeText(sp.Text) {
+		for _, r := range book.SanitizeText(sp.Text) {
 			switch {
 			case unicode.IsSpace(r):
 				pendingSpace = true
@@ -180,11 +182,11 @@ func normalizeSpans(in []Span) []Span {
 	return out
 }
 
-func hasVisibleText(spans []Span) bool {
+func hasVisibleText(spans []book.Span) bool {
 	return strings.TrimSpace(spansText(spans)) != ""
 }
 
-func spansText(spans []Span) string {
+func spansText(spans []book.Span) string {
 	var b strings.Builder
 	for _, sp := range spans {
 		b.WriteString(sp.Text)
@@ -211,7 +213,7 @@ func preText(n *html.Node) string {
 		for c := cur.FirstChild; c != nil; c = c.NextSibling {
 			switch c.Type {
 			case html.TextNode:
-				b.WriteString(SanitizeText(c.Data))
+				b.WriteString(book.SanitizeText(c.Data))
 			case html.ElementNode:
 				switch c.Data {
 				case "br":
@@ -227,3 +229,65 @@ func preText(n *html.Node) string {
 	walk(n)
 	return b.String()
 }
+
+// Attr returns an attribute value case-insensitively. The epub: prefix is
+// accepted for attributes that some HTML parsers preserve and others strip.
+func Attr(n *html.Node, key string) string {
+	if n == nil {
+		return ""
+	}
+	for _, a := range n.Attr {
+		if strings.EqualFold(a.Key, key) || strings.EqualFold(a.Key, strings.TrimPrefix(key, "epub:")) {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+// FirstChildElement returns the first direct child with one of the tags.
+func FirstChildElement(n *html.Node, tags ...string) *html.Node {
+	if n == nil {
+		return nil
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type != html.ElementNode {
+			continue
+		}
+		for _, tag := range tags {
+			if c.Data == tag {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// TextContent returns the visible text of a node, skipping scripts/styles.
+func TextContent(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		switch n.Type {
+		case html.TextNode:
+			b.WriteString(n.Data)
+		case html.ElementNode:
+			if n.Data == "script" || n.Data == "style" {
+				return
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return b.String()
+}
+
+// firstChildElement is the internal alias kept for parser readability.
+func firstChildElement(n *html.Node, tags ...string) *html.Node {
+	return FirstChildElement(n, tags...)
+}
+
+func textContent(n *html.Node) string { return TextContent(n) }
+
+func attrValue(n *html.Node, key string) string { return Attr(n, key) }
