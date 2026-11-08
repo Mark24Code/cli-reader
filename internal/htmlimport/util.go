@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 
@@ -121,36 +122,75 @@ func appendStyled(spans []book.Span, sp book.Span) []book.Span {
 
 // normalizeSpans collapses whitespace, trims line edges and merges adjacent
 // runs with identical styling. Newlines are preserved as hard breaks.
+//
+// Text is accumulated in a byte buffer and materialised as a string only when
+// a run ends. Appending rune by rune directly to Span.Text would reallocate
+// the whole string for every rune, which is quadratic and catastrophic for the
+// multi-megabyte documents found in large MOBI/AZW3 books.
 func normalizeSpans(in []book.Span) []book.Span {
 	var out []book.Span
+	var cur []byte
+	var curStyle book.Span
+	hasCur := false
 	pendingSpace := false
-	appendRune := func(style book.Span, r rune) {
-		style.Text = string(r)
-		if len(out) > 0 {
-			last := &out[len(out)-1]
-			if sameStyle(*last, style) {
-				last.Text += string(r)
-				return
-			}
+
+	// contentSeen reports whether any text has been emitted so far.
+	contentSeen := func() bool { return hasCur || len(out) > 0 }
+
+	flush := func() {
+		if !hasCur {
+			return
 		}
+		style := curStyle
+		style.Text = string(cur)
 		out = append(out, style)
+		cur = cur[:0]
+		hasCur = false
+	}
+	appendRune := func(style book.Span, r rune) {
+		if hasCur && !sameStyle(curStyle, style) {
+			flush()
+		}
+		if !hasCur {
+			style.Text = ""
+			curStyle = style
+			hasCur = true
+		}
+		cur = utf8.AppendRune(cur, r)
 	}
 	trimTrailingSpace := func() {
-		for len(out) > 0 {
+		for {
+			if hasCur {
+				for len(cur) > 0 && (cur[len(cur)-1] == ' ' || cur[len(cur)-1] == '\t') {
+					cur = cur[:len(cur)-1]
+				}
+				if len(cur) > 0 {
+					return
+				}
+				hasCur = false
+			}
+			if len(out) == 0 {
+				return
+			}
 			last := &out[len(out)-1]
 			last.Text = strings.TrimRight(last.Text, " \t")
-			if last.Text == "" {
-				out = out[:len(out)-1]
-				continue
+			if last.Text != "" {
+				return
 			}
-			break
+			out = out[:len(out)-1]
 		}
+	}
+	endsWithNewline := func() bool {
+		if hasCur {
+			return len(cur) > 0 && cur[len(cur)-1] == '\n'
+		}
+		return len(out) > 0 && strings.HasSuffix(out[len(out)-1].Text, "\n")
 	}
 	for _, sp := range in {
 		if sp.Break {
 			pendingSpace = false
 			trimTrailingSpace()
-			if len(out) > 0 {
+			if contentSeen() {
 				appendRune(sp, '\n')
 			}
 			continue
@@ -162,7 +202,7 @@ func normalizeSpans(in []book.Span) []book.Span {
 			case unicode.IsSpace(r):
 				pendingSpace = true
 			default:
-				if pendingSpace && len(out) > 0 && !strings.HasSuffix(out[len(out)-1].Text, "\n") {
+				if pendingSpace && contentSeen() && !endsWithNewline() {
 					appendRune(style, ' ')
 				}
 				pendingSpace = false
@@ -170,6 +210,7 @@ func normalizeSpans(in []book.Span) []book.Span {
 			}
 		}
 	}
+	flush()
 	for len(out) > 0 {
 		last := &out[len(out)-1]
 		last.Text = strings.TrimRight(last.Text, " \t\n")

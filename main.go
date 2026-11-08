@@ -36,9 +36,10 @@ func run(args []string) int {
 	pdfModeFlag := fs.String("pdf-mode", "image", "PDF 模式: image（默认，精确图片渲染）, text, auto")
 	showVersion := fs.Bool("version", false, "显示版本")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "用法: cli-reader [选项] <book>")
+		fmt.Fprintln(os.Stderr, "用法: cli-reader [选项] <book|目录>")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "在 Claude 风格的终端界面中阅读电子书（EPUB/PDF/TXT/Markdown/HTML/CBZ/MOBI/AZW3）。")
+		fmt.Fprintln(os.Stderr, "传入目录（例如 .）会列出当前目录中可打开的文档供选择。")
 		fmt.Fprintln(os.Stderr)
 		fs.PrintDefaults()
 	}
@@ -76,6 +77,26 @@ func run(args []string) int {
 		return 2
 	}
 
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		fmt.Fprintln(os.Stderr, "错误: 需要在交互式终端中运行")
+		return 1
+	}
+	if info, statErr := os.Stat(bookPath); statErr == nil && info.IsDir() {
+		chosen, ok, pickErr := tui.PickBook(bookPath, format)
+		if pickErr != nil {
+			if errors.Is(pickErr, tui.ErrNoBooks) {
+				fmt.Fprintf(os.Stderr, "%v: %s\n", pickErr, bookPath)
+			} else {
+				fmt.Fprintln(os.Stderr, "无法列出目录:", pickErr)
+			}
+			return 1
+		}
+		if !ok {
+			return 0
+		}
+		bookPath = chosen
+	}
+
 	openBook := func(mode string) (*book.Book, error) {
 		b, openErr := formats.OpenWithOptions(bookPath, format, formats.Options{PDFMode: mode})
 		if openErr == nil {
@@ -109,11 +130,6 @@ func run(args []string) int {
 		}
 	}
 	printWarnings(bk)
-
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		fmt.Fprintln(os.Stderr, "错误: 需要在交互式终端中运行")
-		return 1
-	}
 
 	path := strings.TrimSpace(*stateFile)
 	if path == "" {

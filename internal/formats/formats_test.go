@@ -103,6 +103,49 @@ func TestDetectUnsupported(t *testing.T) {
 	}
 }
 
+func TestListSupported(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("# hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.bin"), []byte{0, 1, 2, 3}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Plain text without a document extension must not be listed even though
+	// Detect can open it as TXT.
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "LICENSE"), []byte("MIT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".hidden.md"), []byte("# hidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ListSupported(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Name != "a.txt" || entries[1].Name != "b.md" {
+		t.Fatalf("entries = %#v", entries)
+	}
+
+	entries, err = ListSupported(dir, book.FormatMarkdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name != "b.md" {
+		t.Fatalf("markdown entries = %#v", entries)
+	}
+}
+
 func TestOpenTextFormats(t *testing.T) {
 	dir := t.TempDir()
 	txt := filepath.Join(dir, "novel.txt")

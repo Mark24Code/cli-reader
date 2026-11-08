@@ -7,6 +7,83 @@ import (
 	"cli-reader/internal/book"
 )
 
+func spanTexts(spans []book.Span) []string {
+	out := make([]string, len(spans))
+	for i, sp := range spans {
+		out[i] = sp.Text
+	}
+	return out
+}
+
+func TestNormalizeSpansMergingAndTrimming(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []book.Span
+		want []string
+	}{
+		{
+			name: "collapse whitespace",
+			in:   []book.Span{{Text: "  hello   world  "}},
+			want: []string{"hello world"},
+		},
+		{
+			name: "merge same style",
+			in:   []book.Span{{Text: "ab"}, {Text: "cd"}},
+			want: []string{"abcd"},
+		},
+		{
+			name: "keep style boundary",
+			in:   []book.Span{{Text: "a", Bold: true}, {Text: "b"}},
+			want: []string{"a", "b"},
+		},
+		{
+			name: "break joins with newline",
+			in:   []book.Span{{Text: "a"}, {Break: true}, {Text: "b"}},
+			want: []string{"a\nb"},
+		},
+		{
+			name: "break trims pending space",
+			in:   []book.Span{{Text: "a "}, {Break: true}, {Text: "b"}},
+			want: []string{"a\nb"},
+		},
+		{
+			name: "leading break is dropped",
+			in:   []book.Span{{Break: true}, {Text: "a"}},
+			want: []string{"a"},
+		},
+		{
+			name: "trailing break is dropped",
+			in:   []book.Span{{Text: "a"}, {Break: true}},
+			want: []string{"a"},
+		},
+		{
+			name: "leading and trailing space trimmed",
+			in:   []book.Span{{Text: " a "}},
+			want: []string{"a"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := spanTexts(normalizeSpans(tc.in))
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("normalizeSpans = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A single large run must not be built with repeated string concatenation:
+// that is quadratic and made large MOBI/AZW3 books allocate tens of gigabytes.
+func TestNormalizeSpansLargeRunAllocatesLinearly(t *testing.T) {
+	in := []book.Span{{Text: strings.Repeat("文", 10_000)}}
+	allocs := testing.AllocsPerRun(1, func() {
+		normalizeSpans(in)
+	})
+	if allocs > 1000 {
+		t.Fatalf("normalizeSpans performed %v allocations for one large run; expected O(1) allocation events", allocs)
+	}
+}
+
 func parseTest(t *testing.T, data string) *book.Chapter {
 	t.Helper()
 	res, err := Parse([]byte(data), Options{Href: "OEBPS/ch.xhtml"})

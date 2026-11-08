@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -48,6 +49,58 @@ func ParseFormat(s string) (book.Format, bool) {
 type Options struct {
 	// PDFMode is "image" (default), "text" or "auto".
 	PDFMode string
+}
+
+// Entry describes one openable document found in a directory.
+type Entry struct {
+	Path   string
+	Name   string
+	Format book.Format
+	Size   int64
+}
+
+// ListSupported returns regular files directly inside dir that can be opened.
+// Hidden files and subdirectories are ignored. When only is non-empty, only
+// documents of that format are returned.
+func ListSupported(dir string, only book.Format) ([]Entry, error) {
+	items, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, item := range items {
+		if item.IsDir() || strings.HasPrefix(item.Name(), ".") {
+			continue
+		}
+		info, err := item.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		// Require a known document extension. Detect falls back to TXT for any
+		// readable text, which would otherwise list source files, configs and
+		// READMEs as books.
+		if _, known := formatFromExtension(item.Name()); !known {
+			continue
+		}
+		name := filepath.Join(dir, item.Name())
+		format, err := Detect(name)
+		if err != nil {
+			continue
+		}
+		if only != "" && format != only {
+			continue
+		}
+		out = append(out, Entry{
+			Path:   name,
+			Name:   item.Name(),
+			Format: format,
+			Size:   info.Size(),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, nil
 }
 
 // Open loads path using override when set, or auto-detects the container.

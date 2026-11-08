@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/jpeg"
 	"image/png"
@@ -144,7 +145,12 @@ func Run(b *book.Book, protocol imgterm.Protocol, initialPage int) (int, Action,
 		draw()
 	}
 	nextPage := func(delta int) {
-		next := v.page + delta
+		// A spread whose right page is the last page already shows the end;
+		// don't step onto that page alone.
+		if delta > 0 && v.page+v.shown-1 >= v.total {
+			return
+		}
+		next := v.page + delta*v.pageStep()
 		if next < 1 {
 			next = 1
 		}
@@ -154,6 +160,27 @@ func Run(b *book.Book, protocol imgterm.Protocol, initialPage int) (int, Action,
 		if next != v.page {
 			goToPage(next, true)
 		}
+	}
+	toggleSpread := func() {
+		v.spread = !v.spread
+		v.scroll = 0
+		v.loadPage()
+		v.uiMode = uiNormal
+		v.haveFrame = false
+		draw()
+	}
+	fitWidth := func() {
+		v.zoom = 1
+		v.scroll = 0
+		v.haveFrame = false
+		draw()
+	}
+	fitPage := func() {
+		width, height := termSize()
+		v.zoom = fitPageZoom(v.imgW, v.imgH, width, height-6)
+		v.scroll = 0
+		v.haveFrame = false
+		draw()
 	}
 	scrollPage := func(dir int) {
 		w, h := termSize()
@@ -339,6 +366,12 @@ func Run(b *book.Book, protocol imgterm.Protocol, initialPage int) (int, Action,
 				scrollPage(1)
 			case 'k':
 				scrollPage(-1)
+			case 's':
+				toggleSpread()
+			case 'w':
+				fitWidth()
+			case 'c':
+				fitPage()
 			case 'b':
 				goBack()
 			case 't':
@@ -513,7 +546,10 @@ func (v *viewer) renderHelp() {
 	fmt.Fprintf(os.Stdout, "\x1b[2;1H%s%s%s", dim, repeat("─", w), reset)
 	lines := []string{
 		"↑ / ↓ 或 j / k    纵向滚动（约 20% 屏高）",
-		"← / → 或 n / p    上一页 / 下一页",
+		"← / → 或 n / p    上一页 / 下一页（双页模式一次两页）",
+		"s                 单页 / 双页切换",
+		"w                 宽度撑满（100%，可纵向滚动）",
+		"c                 整页居中（完整页面缩放到窗口内）",
 		"PgUp / PgDn       整屏滚动",
 		"- / =             缩小 / 放大",
 		"g / G             页首 / 页尾",
@@ -597,6 +633,8 @@ type viewer struct {
 	page     int
 	scroll   int
 	zoom     float64
+	spread   bool // show two pages side by side
+	shown    int  // number of pages currently composed (1 or 2)
 
 	uiMode    uiMode
 	navCursor int
@@ -623,33 +661,117 @@ func (v *viewer) loadPage() {
 	v.img = nil
 	v.imgW, v.imgH = 0, 0
 	v.loadErr = ""
+	v.shown = 1
 	v.cache = make(map[string]imgterm.Prepared)
 	if v.page < 1 || v.page > len(v.b.Chapters) {
 		v.loadErr = "页码无效"
 		return
 	}
-	ch := &v.b.Chapters[v.page-1]
+	left, err := v.decodePage(v.page)
+	if err != nil {
+		v.loadErr = err.Error()
+		return
+	}
+	v.img = left
+	if v.spread && v.page < len(v.b.Chapters) {
+		// A page without an image on the right leaves the left page alone.
+		if right, rerr := v.decodePage(v.page + 1); rerr == nil {
+			v.img = composeSpread(left, right)
+			v.shown = 2
+		}
+	}
+	b := v.img.Bounds()
+	v.imgW, v.imgH = b.Dx(), b.Dy()
+}
+
+// decodePage renders and decodes the page image for a 1-based page number.
+func (v *viewer) decodePage(page int) (image.Image, error) {
+	ch := &v.b.Chapters[page-1]
 	var path string
 	if len(ch.Blocks) > 0 && ch.Blocks[0].Image != nil {
 		path = ch.Blocks[0].Image.Path
 	}
 	if path == "" {
-		v.loadErr = "这一页没有可显示的图片"
-		return
+		return nil, errors.New("这一页没有可显示的图片")
 	}
 	data, _, err := v.b.ImageBytes(path)
 	if err != nil {
-		v.loadErr = "渲染页面失败: " + err.Error()
-		return
+		return nil, fmt.Errorf("渲染页面失败: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		v.loadErr = "解码页面图片失败: " + err.Error()
-		return
+		return nil, fmt.Errorf("解码页面图片失败: %w", err)
 	}
-	v.img = img
-	b := img.Bounds()
-	v.imgW, v.imgH = b.Dx(), b.Dy()
+	return img, nil
+}
+
+// pageStep is how many pages one turn advances. Spread mode shows two pages,
+// so it advances two at a time; a jump from the table of contents or the page
+// prompt still goes to the exact requested page.
+func (v *viewer) pageStep() int {
+	if v.spread {
+		return 2
+	}
+	return 1
+}
+
+// fitPageZoom returns the zoom that shows the whole page inside the viewport
+// and leaves it centered. It never magnifies past 100% width, so fit-page is
+// also a fit-width view for short pages.
+func fitPageZoom(imgW, imgH, width, bodyRows int) float64 {
+	if imgW <= 0 || imgH <= 0 || width <= 0 || bodyRows <= 0 {
+		return 1
+	}
+	// Half a row of slack keeps geometry's rounding from producing a scrollbar.
+	z := 2 * (float64(bodyRows) - 0.5) * float64(imgW) / (float64(width) * float64(imgH))
+	if z > 1 {
+		z = 1
+	}
+	if z < 0.05 {
+		z = 0.05
+	}
+	return z
+}
+
+const minSpreadGutter = 8
+
+var spreadGutterColor = color.RGBA{R: 96, G: 92, B: 88, A: 255}
+
+// spreadGutter returns the pixel width of the gap between two pages. It scales
+// with the combined page width so the gap stays a couple of cells wide once
+// the spread is fitted to the terminal.
+func spreadGutter(leftWidth, rightWidth int) int {
+	return max(minSpreadGutter, (leftWidth+rightWidth)/50)
+}
+
+// composeSpread lays two page images side by side on a white canvas, centering
+// the shorter page vertically and leaving a muted gutter between them.
+func composeSpread(left, right image.Image) image.Image {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	lb, rb := left.Bounds(), right.Bounds()
+	lw, lh := lb.Dx(), lb.Dy()
+	rw, rh := rb.Dx(), rb.Dy()
+	gutter := spreadGutter(lw, rw)
+	width, height := lw+gutter+rw, max(lh, rh)
+	if width <= 0 || height <= 0 {
+		return left
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Page renders are usually light; a white canvas keeps the margins that
+	// differently sized pages leave behind from showing as black bars.
+	draw.Draw(dst, dst.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(dst, image.Rect(lw, 0, lw+gutter, height),
+		image.NewUniform(spreadGutterColor), image.Point{}, draw.Src)
+	ly := (height - lh) / 2
+	draw.Draw(dst, image.Rect(0, ly, lw, ly+lh), left, lb.Min, draw.Src)
+	ry := (height - rh) / 2
+	draw.Draw(dst, image.Rect(lw+gutter, ry, lw+gutter+rw, ry+rh), right, rb.Min, draw.Src)
+	return dst
 }
 
 // geometry returns the full-width page height in cells, the scrollable range,
@@ -762,13 +884,21 @@ func (v *viewer) render() {
 		filled = 8
 	}
 	bar := accent + repeat("▰", filled) + reset + dim + repeat("▱", 8-filled) + reset
-	right := bar + " " + muted + fmt.Sprintf("%.0f%% · %d/%d", overall*100, v.page, v.total) + reset
+	pageLabel := fmt.Sprintf("%d/%d", v.page, v.total)
+	if v.shown > 1 {
+		pageLabel = fmt.Sprintf("%d–%d/%d", v.page, v.page+v.shown-1, v.total)
+	}
+	right := bar + " " + muted + fmt.Sprintf("%.0f%% · %s", overall*100, pageLabel) + reset
 
 	left := accent + "✻ cli-reader" + reset + " " + muted + "·" + reset + " " + "《" + title + "》"
 	left = ansi.Truncate(left, max(1, width-ansi.StringWidth(right)-3), "…")
-	status := fmt.Sprintf("  %d%% 缩放 · 滚动 %d%% · %s",
-		int(math.Round(v.zoom*100)), scrollPct, v.protocol.Label())
-	footer := "  ↑↓ 滚动 · ←→/n/p 翻页 · -/= 缩放 · t 目录 · / 跳转 · Tab 文本 · q 退出"
+	mode := "单页"
+	if v.spread {
+		mode = "双页"
+	}
+	status := fmt.Sprintf("  %d%% 缩放 · 滚动 %d%% · %s · %s",
+		int(math.Round(v.zoom*100)), scrollPct, mode, v.protocol.Label())
+	footer := "  ↑↓ 滚动 · ←→ 翻页 · s 双页 · w 撑满 · c 居中 · -/= 缩放 · t 目录 · / 跳转 · Tab 文本 · q 退出"
 
 	drawChrome := func(full bool) {
 		if full {

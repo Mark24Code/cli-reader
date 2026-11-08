@@ -2,6 +2,7 @@
 package mobibook
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
@@ -32,6 +33,7 @@ var (
 	reImgRec      = regexp.MustCompile(`(?i)(<img\b[^>]*?)\brecindex\s*=\s*["']?(\d+)["']?`)
 	reKindleEmbed = regexp.MustCompile(`(?i)kindle:embed:([0-9A-V]+)(?:\?[^"'\s)>]*)?`)
 	reGuide       = regexp.MustCompile(`(?is)<guide\b[^>]*>.*?</guide>`)
+	reHasHTML     = regexp.MustCompile(`(?i)<html`)
 )
 
 // Open reads a MOBI or AZW3 file into the shared book model.
@@ -119,10 +121,10 @@ func Open(name string) (*book.Book, error) {
 		return nil, err
 	}
 	htmlText := decodeBookText(rawText, textEncoding(mh))
-	if strings.TrimSpace(htmlText) == "" {
+	if len(bytes.TrimSpace(htmlText)) == 0 {
 		return nil, fmt.Errorf("MOBI 中没有可阅读的正文")
 	}
-	if mh != nil && mh.isKF8() && !strings.Contains(strings.ToLower(htmlText), "<html") {
+	if mh != nil && mh.isKF8() && !reHasHTML.Match(htmlText) {
 		b.Warnings = append(b.Warnings, "KF8 内容可能不完整，已按文本流尽力解析")
 	}
 	htmlText = preprocessHTML(htmlText, mh)
@@ -148,10 +150,7 @@ func Open(name string) (*book.Book, error) {
 			}
 		},
 	}
-	parse := func() (htmlimport.Result, error) {
-		return htmlimport.Parse([]byte(htmlText), parseOpts)
-	}
-	res, err := parse()
+	res, err := htmlimport.Parse(htmlText, parseOpts)
 	if err != nil {
 		return nil, fmt.Errorf("解析 MOBI 正文失败: %w", err)
 	}
@@ -164,20 +163,13 @@ func Open(name string) (*book.Book, error) {
 	if len(chapters) == 0 {
 		chapters = []book.Chapter{*res.Chapter}
 	}
-	large := len(chapters) > 3 || len(htmlText) > 2<<20
-	chunked := false
-	if large && len(chapters) == 1 {
+	// A single chapter without usable headings becomes fixed-size sections so
+	// navigation stays responsive. The parsed model is compact enough to keep,
+	// unlike lazily re-parsing the whole book for every chapter view.
+	if len(chapters) == 1 && len(htmlText) > 2<<20 {
 		if chunks := book.ChunkChapter(res.Chapter, 250, baseHref); len(chunks) > 1 {
 			chapters = chunks
 			toc = nil
-			chunked = true
-		}
-	}
-	lazy := large || chunked
-	if lazy {
-		for i := range chapters {
-			chapters[i].Blocks = nil
-			chapters[i].Anchors = nil
 		}
 	}
 	b.Chapters = chapters
@@ -188,32 +180,6 @@ func Open(name string) (*book.Book, error) {
 	b.EnsureTOC()
 	b.SetCloser(mapped.Close)
 	keepOpen = true
-	if lazy {
-		b.SetChapterLoader(func(i int) error {
-			r, err := parse()
-			if err != nil {
-				return err
-			}
-			level := chooseSplitLevel(r.Headings)
-			var part *book.Chapter
-			if chunked {
-				part = book.ChunkChapterPart(r.Chapter, 250, i, baseHref)
-			} else if level > 0 {
-				part = book.SplitPartByHeadings(r.Chapter, r.Headings, level, i, baseHref)
-			} else if i == 0 {
-				part = r.Chapter
-			}
-			if part == nil {
-				return fmt.Errorf("章节索引无效")
-			}
-			target := &b.Chapters[i]
-			target.Blocks = part.Blocks
-			target.Anchors = part.Anchors
-			target.Heading = part.Heading
-			target.DocTitle = part.DocTitle
-			return nil
-		})
-	}
 	return b, nil
 }
 
@@ -261,7 +227,13 @@ func decodeTextRecords(db *palmDB, pdh palmDocHeader, mh *mobiHeader) ([]byte, e
 		}
 	}
 
-	out := make([]byte, 0, pdh.TextLength)
+	// TextLength comes from the untrusted header; never preallocate beyond the
+	// amount of text this loader is willing to keep.
+	capacity := int(pdh.TextLength)
+	if pdh.TextLength > maxTextBytes {
+		capacity = maxTextBytes
+	}
+	out := make([]byte, 0, capacity)
 	for i := 1; i <= count; i++ {
 		record, err := db.recordData(i)
 		if err != nil {
@@ -294,36 +266,39 @@ func decodeTextRecords(db *palmDB, pdh palmDocHeader, mh *mobiHeader) ([]byte, e
 	return out, nil
 }
 
-func decodeBookText(data []byte, encoding uint32) string {
+func decodeBookText(data []byte, encoding uint32) []byte {
 	switch encoding {
 	case 65001:
 		if utf8.Valid(data) {
-			return string(data)
+			return data
 		}
 	case 1252:
 		if decoded, err := charmap.Windows1252.NewDecoder().Bytes(data); err == nil {
-			return string(decoded)
+			return decoded
 		}
 	}
 	if utf8.Valid(data) {
-		return string(data)
+		return data
 	}
-	return textdecode.Decode(data).Text
+	return []byte(textdecode.Decode(data).Text)
 }
 
-func preprocessHTML(text string, mh *mobiHeader) string {
-	text = rePageBreak.ReplaceAllString(text, "<hr/>")
-	text = reGuide.ReplaceAllString(text, "")
+// preprocessHTML rewrites MOBI-specific markup in place where possible. Byte
+// variants of the regexp API are used so that passes which find nothing do not
+// copy the whole (potentially tens of megabytes) document.
+func preprocessHTML(text []byte, mh *mobiHeader) []byte {
+	text = rePageBreak.ReplaceAll(text, []byte("<hr/>"))
+	text = reGuide.ReplaceAll(text, nil)
 	firstImage := uint32(noImageIndex)
 	if mh != nil {
 		firstImage = mh.FirstImageIndex
 	}
-	text = reImgRec.ReplaceAllStringFunc(text, func(match string) string {
-		sub := reImgRec.FindStringSubmatch(match)
+	text = reImgRec.ReplaceAllFunc(text, func(match []byte) []byte {
+		sub := reImgRec.FindSubmatch(match)
 		if len(sub) != 3 {
 			return match
 		}
-		n, err := strconv.Atoi(sub[2])
+		n, err := strconv.Atoi(string(sub[2]))
 		if err != nil || n <= 0 {
 			return match
 		}
@@ -331,20 +306,24 @@ func preprocessHTML(text string, mh *mobiHeader) string {
 		if firstImage != noImageIndex {
 			key = fmt.Sprintf("mobi:img/%d", int(firstImage)+n-1)
 		}
-		return sub[1] + `src="` + key + `"`
+		out := make([]byte, 0, len(sub[1])+len(key)+7)
+		out = append(out, sub[1]...)
+		out = append(out, `src="`...)
+		out = append(out, key...)
+		return append(out, '"')
 	})
-	text = reKindleEmbed.ReplaceAllStringFunc(text, func(match string) string {
-		sub := reKindleEmbed.FindStringSubmatch(match)
+	text = reKindleEmbed.ReplaceAllFunc(text, func(match []byte) []byte {
+		sub := reKindleEmbed.FindSubmatch(match)
 		if len(sub) != 2 {
 			return match
 		}
 		key := "mobi:img/unknown"
 		if firstImage != noImageIndex {
-			if n, err := strconv.ParseInt(sub[1], 32, 64); err == nil && n > 0 {
+			if n, err := strconv.ParseInt(string(sub[1]), 32, 64); err == nil && n > 0 {
 				key = fmt.Sprintf("mobi:img/%d", int64(firstImage)+n-1)
 			}
 		}
-		return key
+		return []byte(key)
 	})
 	return text
 }
