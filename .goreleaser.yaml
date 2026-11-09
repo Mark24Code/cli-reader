@@ -40,6 +40,11 @@ checksum:
   name_template: checksums.txt
 
 release:
+  # 显式指定发布仓库，避免仓库改名后 GoReleaser 仍从旧 remote 推导出 cli-epub-reader，
+  # 导致资产上传返回 307 而失败。
+  github:
+    owner: Mark24Code
+    name: cli-reader
   footer: |
     ---
     **作者**：Mark24Code · <mark.zhangyoung@gmail.com>
