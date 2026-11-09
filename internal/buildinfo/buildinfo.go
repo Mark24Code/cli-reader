@@ -4,7 +4,7 @@ package buildinfo
 // Version is overridden at build time with:
 //
 //	-ldflags "-X cli-reader/internal/buildinfo.Version=v1.2.3"
-var Version = "0.4.1"
+var Version = "0.4.2"
 
 const (
 	Author   = "Mark24Code"
