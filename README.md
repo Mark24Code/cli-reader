@@ -1,11 +1,11 @@
 # cli-reader
 
-一个用 Go 写的终端电子书阅读器：外观模拟 Claude Code 的终端界面，支持 EPUB、PDF、TXT、Markdown、HTML、CBZ 漫画，以及 Kindle 的 MOBI / AZW3。
+一个用 Go 写的独立终端电子书阅读器，支持 EPUB、PDF、TXT、Markdown、HTML、CBZ 漫画，以及 Kindle 的 MOBI / AZW3。
 
 ```text
-✻ cli-reader · 《终端里的 Claude》                                 ▰▰▰▱▱▱▱▱ 33% · 2/3
+✻ cli-reader · 《终端阅读》                                       ▰▰▰▱▱▱▱▱ 33% · 2/3
 ────────────────────────────────────────────────────────────────────────────
-  ✻ Claude  ·  正在阅读
+  ✻ cli-reader  ·  正在阅读
 
   第二章 代码与高亮
 
@@ -15,16 +15,46 @@
   │ package main
   │
   │ func main() {
-  │     fmt.Println("Claude, but make it a book")
+  │     fmt.Println("Hello, terminal reader")
   │ }
   ╰─
 ────────────────────────────────────────────────────────────────────────────
   ✻ 输入 help 查看操作 · Enter 打开可见图片
-  ❯ / 输入消息或命令                                                     浏览
-  ↑↓ 滚动 · ←→ 小节 · Enter 图片 · t 目录 · f 收藏 · b 返回 · / 对话 · ? 帮助
+  ❯ / 输入命令                                                         浏览
+  ↑↓ 滚动 · ←→ 小节 · Enter 图片 · t 目录 · f 收藏 · b 返回 · / 命令 · ? 帮助
 ```
 
-> 这是 Claude 风格的非官方本地阅读工具，不冒充 Anthropic 产品；不联网，也不调用任何模型。
+> 这是一个独立的本地命令行阅读工具，不联网，也不调用任何模型；所有内容都在本机解析和渲染。
+
+## 安装
+
+Linux / macOS 一键安装，脚本会从 GitHub Releases 下载对应平台的二进制：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mark24Code/cli-reader/main/scripts/install.sh | sh
+```
+
+默认安装到 `~/bin/cli-reader`。可以指定安装目录：
+
+```sh
+# 等价写法二选一
+curl -fsSL https://raw.githubusercontent.com/Mark24Code/cli-reader/main/scripts/install.sh | sh -s -- --dir ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/Mark24Code/cli-reader/main/scripts/install.sh | sh -s -- /usr/local/bin
+```
+
+指定版本（默认取最新 Release）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mark24Code/cli-reader/main/scripts/install.sh | VERSION=v0.4.1 sh
+```
+
+脚本自动识别 macOS / Linux 与 amd64 / arm64，下载对应的 `tar.gz`，并用 Release 中的 `checksums.txt` 校验 SHA-256。如果 `~/bin` 不在 `PATH` 中，按脚本提示把下面一行加入 `~/.zshrc` 或 `~/.bashrc`：
+
+```sh
+export PATH="$HOME/bin:$PATH"
+```
+
+Windows 用户请到 [Releases](https://github.com/Mark24Code/cli-reader/releases) 手动下载 zip 包；也可以参考下文从源码构建。
 
 ## 支持的格式
 
@@ -56,9 +86,9 @@
   - CBZ 页和扫描版 PDF 页按整页缩略图显示；
   - iTerm2/Kitty/Ghostty/WezTerm 中按 Enter 用终端原生协议打开高清图；
   - Markdown/HTML 允许引用书文件同目录子树内的本地图片，越界路径会被拒绝。
-- 浏览模式和对话输入模式分离，单键快捷方式不会和打字冲突。
+- 浏览模式和命令输入模式分离，单键快捷方式不会和打字冲突。
 - 内置「关于」页面（`a`），展示版本、作者与项目主页。
-- 简单关键词对话命令，中英文都支持，不需要模型。
+- 简单关键词命令，中英文都支持，不需要模型。
 
 ## 环境
 
@@ -225,9 +255,9 @@ make release VERSION=minor   # 非交互：patch / minor / major 或 1.2.3
 - 目录中：`s` 收藏/取消收藏高亮章节。
 - 收藏列表中：`d` 删除选中收藏。
 
-## 对话命令
+## 阅读命令
 
-命令解析是关键词/正则匹配，不调用 LLM。支持可选 `/` 前缀以及中英文。
+命令解析是关键词/正则匹配，不调用任何模型。支持可选 `/` 前缀以及中英文。
 
 | 命令示例 | 功能 |
 |---|---|
@@ -429,6 +459,7 @@ internal/tui/               Bubble Tea 模型、命令、弹窗、布局
 internal/testepub/          示例 EPUB 生成器
 scripts/gen-demo-epub.go    生成 testdata/demo.epub
 scripts/release.sh          版本递增、提交、打 tag 并推送
+scripts/install.sh          从 GitHub Releases 下载并安装二进制
 testdata/demo.epub          手测样书
 ```
 
