@@ -92,13 +92,27 @@ case "$arch" in
 esac
 
 if [ -z "$VERSION" ]; then
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" |
+  # 优先通过 releases/latest 的重定向解析最新 tag，避开 GitHub API 的匿名限流（403）。
+  latest_url=$(curl -fsSL --retry 2 -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)
+  case "$latest_url" in
+    */releases/tag/*)
+      VERSION="${latest_url##*/}"
+      VERSION="${VERSION%%\?*}"
+      ;;
+  esac
+fi
+
+if [ -z "$VERSION" ]; then
+  # 重定向方式失败时回退到 API。
+  VERSION=$(curl -fsSL --retry 2 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
     sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
-    head -n 1)
-  if [ -z "$VERSION" ]; then
-    echo "错误: 无法获取最新版本；可设置 VERSION 环境变量后重试，例如 VERSION=v0.4.1" >&2
-    exit 1
-  fi
+    head -n 1 || true)
+fi
+
+if [ -z "$VERSION" ]; then
+  echo "错误: 无法获取最新版本；可设置 VERSION 环境变量后重试，例如 VERSION=v0.4.1" >&2
+  exit 1
 fi
 
 case "$VERSION" in
